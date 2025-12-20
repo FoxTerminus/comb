@@ -12,6 +12,6 @@ class lmsysChatDataset(DatasetBase):
         self.data = self.data.map(lambda x: {'messages': x['conversation']}, remove_columns=['conversation'], num_proc=CPU_NUM)
 
 if __name__ == "__main__":
-    model_name = "XiaomiMiMo/MiMo-V2-Flash"
+    model_name = "meta-llama/Llama-3.1-8B-Instruct"
     dataset = lmsysChatDataset(model_name, split="train")
     print(dataset[1])

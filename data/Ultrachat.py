@@ -11,6 +11,6 @@ class UltrachatDataset(DatasetBase):
         self.data = load_dataset("HuggingFaceH4/ultrachat_200k", split=split)
 
 if __name__ == "__main__":
-    model_name = "XiaomiMiMo/MiMo-V2-Flash"
+    model_name = "meta-llama/Llama-3.1-8B-Instruct"
     dataset = UltrachatDataset(model_name, split="train_sft")
     print(dataset[0])

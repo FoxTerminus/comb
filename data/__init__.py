@@ -6,7 +6,7 @@ TRAIN_DATASETS = ["ultrachat_200k", "lmsys-chat", "moss"]
 TEST_DATASETS = []
 
 DATASET_DICT = {
-    "moss": MossDataset,
+    "ultrachat_200k": UltrachatDataset,
     "lmsys-chat": lmsysChatDataset,
-    "ultrachat_200k": UltrachatDataset
+    "moss": MossDataset,
 }

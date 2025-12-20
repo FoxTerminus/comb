@@ -35,6 +35,6 @@ class MossDataset(DatasetBase):
         return example
 
 if __name__ == "__main__":
-    model_name = "XiaomiMiMo/MiMo-V2-Flash"
+    model_name = "meta-llama/Llama-3.1-8B-Instruct"
     dataset = MossDataset(model_name, split="train")
     print(dataset[0])
