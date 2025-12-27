@@ -8,5 +8,5 @@ TEST_DATASETS = []
 DATASET_DICT = {
     "ultrachat_200k": UltrachatDataset,
     "lmsys-chat": lmsysChatDataset,
-    "moss": MossDataset,
+    "moss": MossDataset
 }

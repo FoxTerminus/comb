@@ -14,4 +14,4 @@ class lmsysChatDataset(DatasetBase):
 if __name__ == "__main__":
     model_name = "meta-llama/Llama-3.1-8B-Instruct"
     dataset = lmsysChatDataset(model_name, split="train")
-    print(dataset[1])
+    print(dataset[0])
