@@ -1,5 +1,5 @@
-"""analyze_token_lengths.py
-This file analyzes the token length distributions of all datasets and generates CDF plots.
+"""
+Simplified version for analyzing token length distributions using pre-calculated token_length field.
 """
 
 import os
@@ -7,73 +7,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')
-import json
-from transformers import AutoTokenizer
 from data import DATASET_DICT
-from data.base import CPU_NUM
 import time
 
-def calculate_token_lengths(dataset, tokenizer, batch_size=1000):
-    """Calculate token lengths for each sample in the dataset using map with batch processing"""
-    
-    print(f"   Calculating token lengths for {len(dataset):,} samples...")
-    
-    # Determine optimal number of processes
-    num_proc = min(CPU_NUM, 16)  # Cap at 16 processes to avoid overhead
-    if len(dataset) < 1000:
-        num_proc = 1  # For small datasets, use single process to avoid overhead
-    elif len(dataset) < 10000:
-        num_proc = min(2, CPU_NUM)  # For medium datasets
-    
-    print(f"   Using {num_proc} processes for parallel processing...")
-    
-    def batch_token_count(examples):
-        """Batch function to count tokens for multiple samples"""
-        token_lengths = []
-        for messages in examples["messages"]:
-            total_tokens = 0
-            for msg in messages:
-                # Use tokenizer's __call__ method which handles empty strings better
-                if msg["content"] and isinstance(msg["content"], str):
-                    # Tokenize and count tokens
-                    tokens = tokenizer(msg["content"], 
-                                      truncation=False, 
-                                      padding=False, 
-                                      add_special_tokens=False)
-                    total_tokens += len(tokens["input_ids"])
-            token_lengths.append(total_tokens)
-        return {"token_length": token_lengths}
-    
-    start_time = time.time()
-    
-    # Apply map function with batch processing
-    dataset_with_lengths = dataset.map(
-        batch_token_count,
-        batched=True,
-        batch_size=batch_size,
-        num_proc=num_proc,
-        desc="📊 Calculating token lengths",
-        keep_in_memory=False
-    )
-    
-    elapsed_time = time.time() - start_time
-    
-    # Extract token lengths
-    token_lengths = dataset_with_lengths["token_length"]
-    
-    print(f"   ✅ Token lengths calculated for {len(token_lengths):,} samples")
-    print(f"   ⏱️  Time taken: {elapsed_time:.2f} seconds")
-    print(f"   📈 Processing speed: {len(dataset)/elapsed_time:.1f} samples/second")
-    
-    return token_lengths
-
-def plot_cdf(token_lengths, dataset_name, model_name, save_dir="token_length_plots", suffix="original"):
+def plot_cdf(token_lengths, dataset_name, model_name, save_dir="token_length_plots"):
     """Plot CDF of token lengths and save the plot"""
     
-    # Create save directory if not exists
     os.makedirs(save_dir, exist_ok=True)
     
-    # Ensure token_lengths is numpy array
     if not isinstance(token_lengths, np.ndarray):
         token_lengths = np.array(token_lengths)
     
@@ -83,15 +24,13 @@ def plot_cdf(token_lengths, dataset_name, model_name, save_dir="token_length_plo
     
     # Create plot
     plt.figure(figsize=(12, 8))
-    
-    # Plot CDF line
     plt.plot(sorted_lengths, cdf, linewidth=3, color='blue', label='CDF')
     
     # Add grid and labels
     plt.grid(True, alpha=0.3, linestyle='--')
     plt.xlabel('Token Length', fontsize=20)
     plt.ylabel('Cumulative Probability', fontsize=20)
-    plt.title(f'Token Length CDF - {dataset_name} ({suffix})\nModel: {model_name}', fontsize=22, pad=20)
+    plt.title(f'Token Length CDF - {dataset_name}\nModel: {model_name}', fontsize=22, pad=20)
     
     # Calculate and plot percentiles
     percentiles = [50, 75, 90, 95, 99]
@@ -121,23 +60,22 @@ def plot_cdf(token_lengths, dataset_name, model_name, save_dir="token_length_plo
     
     # Set x-axis limit
     x_max = np.percentile(token_lengths, 99) * 1.1
-    plt.xlim(0, min(x_max, np.max(token_lengths)))
+    plt.xlim(1000, min(x_max, np.max(token_lengths)))
     
     plt.legend(loc='lower right')
     plt.tight_layout()
     
-    # Save plot (without timestamp)
-    filename = f"{dataset_name}_{model_name.replace('/', '_')}_{suffix}.png"
+    # Save plot
+    filename = f"{dataset_name}_{model_name.replace('/', '_')}.png"
     save_path = os.path.join(save_dir, filename)
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
     plt.close()
     
     print(f"   Saved CDF plot to: {save_path}")
     
-    # Return statistics (just for console output, not saved to file)
+    # Return statistics
     stats = {
         "dataset": dataset_name,
-        "suffix": suffix,
         "total_samples": len(token_lengths),
         "mean": float(np.mean(token_lengths)),
         "median": float(np.median(token_lengths)),
@@ -150,7 +88,7 @@ def plot_cdf(token_lengths, dataset_name, model_name, save_dir="token_length_plo
     
     return stats
 
-def analyze_single_dataset(name, dataset_func, model_name, save_dir="token_length_plots", suffix="original", force_recalculate=False):
+def analyze_single_dataset(name, dataset_func, model_name, save_dir="token_length_plots", force_recalculate=False):
     """Analyze token length distribution for a single dataset"""
     
     print(f"\n{'='*60}")
@@ -158,25 +96,28 @@ def analyze_single_dataset(name, dataset_func, model_name, save_dir="token_lengt
     print(f"{'='*60}")
     
     # Check if plot already exists
-    plot_filename = f"{name}_{model_name.replace('/', '_')}_{suffix}.png"
+    plot_filename = f"{name}_{model_name.replace('/', '_')}.png"
     plot_path = os.path.join(save_dir, plot_filename)
     
     if os.path.exists(plot_path) and not force_recalculate:
         print(f"   Plot already exists: {plot_path}")
-        print(f"   Skipping analysis for {name} (use --force to recalculate)")
+        print(f"   Skipping analysis for {name}")
         return None
     
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    
+    # Load dataset
     split = "train_sft" if name == "ultrachat_200k" else "train"
     ds = dataset_func(model_name, split=split).data
-    print(f"Dataset size: {len(ds):,} samples")
     
-    # Calculate token lengths using optimized map function
-    token_lengths = calculate_token_lengths(ds, tokenizer)
+    # Directly access pre-calculated token_length field
+    if "token_length" not in ds.column_names:
+        print(f"   ❌ Dataset {name} doesn't have 'token_length' field!")
+        return None
+    
+    token_lengths = ds["token_length"]
+    print(f"   Loaded {len(token_lengths):,} pre-calculated token lengths")
     
     # Plot CDF
-    stats = plot_cdf(token_lengths, name, model_name, save_dir, suffix)
+    stats = plot_cdf(token_lengths, name, model_name, save_dir)
     
     # Print summary
     print(f"\n   Summary for {name}:")
@@ -187,29 +128,21 @@ def analyze_single_dataset(name, dataset_func, model_name, save_dir="token_lengt
     print(f"   - 99th percentile: {stats['percentiles'][99]:.0f}")
     
     # Check for long samples
-    threshold = 4096
-    long_samples = [l for l in token_lengths if l > threshold]
+    threshold = 8192
+    long_samples = sum(1 for l in token_lengths if l > threshold)
     if long_samples:
-        print(f"   ⚠️  Found {len(long_samples)} samples > {threshold} tokens")
+        print(f"   ⚠️  Found {long_samples} samples > {threshold} tokens")
         print(f"   Max length: {max(token_lengths)} tokens")
     
     return stats
 
 def analyze_all_datasets(model_name, save_dir="token_length_plots", dataset_names=None, force_recalculate=False):
     """
-    Analyze token length distributions for specified datasets
-    
-    Args:
-        model_name: name of the model to use for tokenization
-        save_dir: directory to save plots and statistics
-        dataset_names: list of dataset names to analyze (None = all datasets)
-        force_recalculate: force recalculation even if plot exists
+    Analyze token length distributions for specified datasets using pre-calculated token_length
     """
     print("\n" + "="*70)
     print("ANALYZING TOKEN LENGTH DISTRIBUTIONS")
-    print(f"Using up to {min(CPU_NUM, 16)} CPU cores for parallel processing")
-    if not force_recalculate:
-        print("Note: Will skip datasets that already have plots (use --force to recalculate)")
+    print(f"Using pre-calculated token_length field")
     print("="*70)
     
     all_stats = {}
@@ -229,7 +162,7 @@ def analyze_all_datasets(model_name, save_dir="token_length_plots", dataset_name
     for name, dataset_func in dataset_items:
         try:
             stats = analyze_single_dataset(
-                name, dataset_func, model_name, save_dir, "original", force_recalculate
+                name, dataset_func, model_name, save_dir, force_recalculate
             )
             
             if stats is not None:
@@ -249,9 +182,9 @@ def analyze_all_datasets(model_name, save_dir="token_length_plots", dataset_name
     print(f"Processed: {processed_count} datasets, Skipped: {skipped_count} datasets")
     print("="*70)
     
-    # Print summary table only for processed datasets
+    # Print summary table
     if all_stats:
-        print("\nDATASET SUMMARY TABLE (Processed datasets only):")
+        print("\nDATASET SUMMARY TABLE:")
         print("-" * 100)
         print(f"{'Dataset':<25} {'Samples':<10} {'Mean':<10} {'Median':<10} {'90th %':<10} {'95th %':<10} {'99th %':<10}")
         print("-" * 100)
@@ -268,9 +201,9 @@ def main():
     """Main function for standalone token length analysis"""
     import argparse
     
-    parser = argparse.ArgumentParser(description='Analyze token length distributions of datasets')
+    parser = argparse.ArgumentParser(description='Analyze token length distributions using pre-calculated token_length')
     parser.add_argument('--model', type=str, default='meta-llama/Llama-3.1-8B-Instruct',
-                       help='Model name for tokenization (default: meta-llama/Llama-3.1-8B-Instruct)')
+                       help='Model name (default: meta-llama/Llama-3.1-8B-Instruct)')
     parser.add_argument('--save_dir', type=str, default='token_length_plots',
                        help='Directory to save plots (default: token_length_plots)')
     parser.add_argument('--datasets', type=str, nargs='+',
@@ -281,7 +214,6 @@ def main():
     args = parser.parse_args()
     
     print(f"Starting analysis with model: {args.model}")
-    print(f"System has {CPU_NUM} CPU cores available")
     
     start_time = time.time()
     
@@ -299,7 +231,7 @@ def main():
     if stats:
         print(f"\n✅ Successfully analyzed {len(stats)} datasets")
     else:
-        print("\n📊 No new datasets were analyzed (all plots already exist)")
+        print("\n📊 No new datasets were analyzed")
 
 if __name__ == "__main__":
     main()
