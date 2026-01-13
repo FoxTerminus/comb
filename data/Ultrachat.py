@@ -1,14 +1,21 @@
 """This file processes the Ultrachat dataset."""
 
 from datasets import Dataset
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
 from data.base import DatasetBase, CPU_NUM
+from data.base import HF_HOME
 
 class UltrachatDataset(DatasetBase):
     name = "ultrachat_200k"
 
     def _init_data(self, split):
-        self.data = load_dataset("HuggingFaceH4/ultrachat_200k", split=split)
+        try:
+            local_path = HF_HOME + f'/datasets/{self.name}_{model_name.replace("/", "_")}'
+            print(f"Loading dataset from local path: {local_path}")
+            self.data = load_from_disk(local_path)
+            self.data = self.data.remove_columns(["token_length", "encoder_input", "decoder_input", "label"])
+        except:
+            self.data = load_dataset("HuggingFaceH4/ultrachat_200k", split=split)
         self.data = self.data.map(self._prepare_data, num_proc=CPU_NUM)
         self.data = self.data.filter(lambda x: x['token_length'] >= 1024, num_proc=CPU_NUM)
         self.data = self._adjust_format()
@@ -24,20 +31,41 @@ class UltrachatDataset(DatasetBase):
                 start = i + 1
         message_tokens = message_tokens[1:]  # Exclude the first message (system prompt)
         
+        # token_count = 0
+        # turn_count = 0
+        # history_item = []
+        # history = []
+        # turns = []
+        # for msg in message_tokens:
+        #     token_count += len(msg)
+        #     history_item.extend(msg)
+        #     turn_count += 1
+        #     if token_count >= 1024 and turn_count % 2 == 0:
+        #         turns.append(turn_count // 2)
+        #         history.append(history_item)
+        #         history_item = []
+        #         token_count = 0
+        
         token_count = 0
         turn_count = 0
         history_item = []
+        current_dialog = []
         history = []
         turns = []
         for msg in message_tokens:
             token_count += len(msg)
-            history_item.extend(msg)
+            current_dialog.extend(msg)
             turn_count += 1
-            if token_count >= 1024 and turn_count % 2 == 0:
-                turns.append(turn_count // 2)
-                history.append(history_item)
-                history_item = []
-                token_count = 0
+            if turn_count % 2 == 0:
+                if token_count < 1024:
+                    history_item.extend(current_dialog)
+                    current_dialog = []
+                else:
+                    turns.append(turn_count // 2 - 1)
+                    history.append(history_item)
+                    history_item = current_dialog
+                    current_dialog = []
+                    token_count = len(history_item)
         
         encoder_input = []
         decoder_input = []
@@ -52,7 +80,7 @@ class UltrachatDataset(DatasetBase):
             decoder_input.append(decoder)
             for i, msg in enumerate(message_tokens[turns[i]*2:]):
                 if i % 2 == 0:
-                    label_item.extend([-100])
+                    label_item.extend([-100] * len(msg))
                 else:
                     label_item.extend(msg)
             label.append(label_item)
@@ -89,5 +117,5 @@ class UltrachatDataset(DatasetBase):
 if __name__ == "__main__":
     model_name = "meta-llama/Llama-3.1-8B-Instruct"
     dataset = UltrachatDataset(model_name, split="train_sft")
-    # print(dataset[0])
+    print(dataset[0])
     print(f"Total samples: {len(dataset)}")
