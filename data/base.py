@@ -15,41 +15,88 @@ from transformers import AutoTokenizer
 
 # We divide the dataset into buckets based on the length of the context.
 # This helps in efficient batching during training.
-BUCKET_SIZE = [0, 256, 512, 1024, 2048, 4096, 8192, 16384]
+# BUCKET_SIZE = [0, 256, 512, 1024, 2048, 4096, 8192, 16384]
 # Due to different lengths of the buckets, we adjust the batch size accordingly
 # to prevent Out of Memory (OOM) errors.
-BUCKET_BATCH_SIZE = [8, 8, 8, 4, 4, 1, 1]
-KEYS_FOR_TRAIN = ["input_ids", "chunk_ids", "cross_attention_mask", "shift_labels"]
+# BUCKET_BATCH_SIZE = [8, 8, 8, 4, 4, 1, 1]
+# KEYS_FOR_TRAIN = ["input_ids", "chunk_ids", "cross_attention_mask", "shift_labels"]
 CPU_NUM = os.cpu_count()
 HF_HOME = os.getenv('HF_HOME', '~/.cache/huggingface')
-CACHE_DIR = HF_HOME + '/bucket_cache'
-NUM_INSTANCES_PER_FILE = 1 << 20
+# CACHE_DIR = HF_HOME + '/bucket_cache'
+# NUM_INSTANCES_PER_FILE = 1 << 20
 
 def collate_fn(batch):
+    # return {
+    #     key: stack([tensor(item[key]) for item in batch]) for key in KEYS_FOR_TRAIN
+    # }
+    all_input_ids, all_chunk_ids, all_shift_labels = [], [], []
+    all_pos_q, all_pos_k = [], []
+    cu_seqlens_q = [0]      # For Decoder
+    cu_seqlens_k = [0]      # For Cross Attention
+    cu_seqlens_chunk = [0]  # For Self-Attention in Chunk Model    
+    max_q, max_k, max_chunk = 0, 0, 0
+
+    for item in batch:
+        # 1.Process Decoder (Input)
+        q_ids = torch.tensor(item['input_ids'])
+        labels = torch.tensor(item['shift_labels'])
+        all_input_ids.append(q_ids)
+        all_shift_labels.append(labels)
+        all_pos_q.append(torch.arange(len(q_ids)))
+        cu_seqlens_q.append(cu_seqlens_q[-1] + len(q_ids))
+        max_q = max(max_q, len(q_ids))
+        
+        # 2.Process Encoder (Chunks)
+        sample_chunks_len = 0
+        for chunk in item['chunk_ids']: # item['chunk_ids'] is in list[list] format
+            c_ids = torch.tensor(chunk)
+            all_chunk_ids.append(c_ids)
+            all_pos_k.append(torch.arange(len(c_ids)))
+            chunk_len = len(c_ids)
+            sample_chunks_len += chunk_len
+            
+            # For self-attention, we need to record the cumulative sequence lengths of the chunks.
+            cu_seqlens_chunk.append(cu_seqlens_chunk[-1] + chunk_len)
+            max_chunk = max(max_chunk, chunk_len)
+            
+        # For cross-attention, we need to record the cumulative sequence lengths of the chunks for each sample.
+        cu_seqlens_k.append(cu_seqlens_k[-1] + sample_chunks_len)
+        max_k = max(max_k, sample_chunks_len)
+
     return {
-        key: stack([tensor(item[key]) for item in batch]) for key in KEYS_FOR_TRAIN
+        "input_ids": torch.cat(all_input_ids).unsqueeze(0),
+        "chunk_ids": torch.cat(all_chunk_ids).unsqueeze(0),
+        "shift_labels": torch.cat(all_shift_labels).unsqueeze(0) if all_shift_labels else None,
+        "cu_seqlens_q": torch.tensor(cu_seqlens_q, dtype=torch.int32),
+        "cu_seqlens_k": torch.tensor(cu_seqlens_k, dtype=torch.int32),
+        "cu_seqlens_chunk": torch.tensor(cu_seqlens_chunk, dtype=torch.int32),
+        "max_seqlen_q": max_q,
+        "max_seqlen_k": max_k,
+        "max_seqlen_chunk": max_chunk,
+        "position_ids": torch.cat(all_pos_q).unsqueeze(0),
+        "position_ids_k": torch.cat(all_pos_k).unsqueeze(0)
     }
 
-def pad_tokens(example, chunk_length, input_length, label_column, pad_token_id=128004):
-    input_id = example['input_ids']
-    label = example[label_column]
-    chunk_id = example['chunk_ids']
-    mask = example['cross_attention_mask']
-    # Concatenate input and label
-    l = len(input_id)
-    input_id = np.concatenate([input_id, label])
-    # NOTE: Here we manually shift the labels.
-    label = np.pad(label, (l - 1, 0), constant_values=-100)
-    # Truncate
-    input_id = input_id[:input_length]
-    label = label[:input_length]
-    # Pad
-    return pd.Series([
-        np.pad(input_id, (0, input_length-len(input_id)), constant_values=pad_token_id),
-        np.pad(chunk_id, (0, chunk_length-len(chunk_id)), constant_values=pad_token_id),
-        np.pad(mask, (0, chunk_length-len(mask)), constant_values=0),
-        np.pad(label, (0, input_length-len(label)), constant_values=-100)
-    ], index=KEYS_FOR_TRAIN)
+# def pad_tokens(example, chunk_length, input_length, label_column, pad_token_id=128004):
+#     input_id = example['input_ids']
+#     label = example[label_column]
+#     chunk_id = example['chunk_ids']
+#     mask = example['cross_attention_mask']
+#     # Concatenate input and label
+#     l = len(input_id)
+#     input_id = np.concatenate([input_id, label])
+#     # NOTE: Here we manually shift the labels.
+#     label = np.pad(label, (l - 1, 0), constant_values=-100)
+#     # Truncate
+#     input_id = input_id[:input_length]
+#     label = label[:input_length]
+#     # Pad
+#     return pd.Series([
+#         np.pad(input_id, (0, input_length-len(input_id)), constant_values=pad_token_id),
+#         np.pad(chunk_id, (0, chunk_length-len(chunk_id)), constant_values=pad_token_id),
+#         np.pad(mask, (0, chunk_length-len(mask)), constant_values=0),
+#         np.pad(label, (0, input_length-len(label)), constant_values=-100)
+#     ], index=KEYS_FOR_TRAIN)
 
 class DatasetBase(ABC):
     def __init__(self, model_name, split="train", max_input_length=512):
@@ -80,49 +127,49 @@ class DatasetBase(ABC):
     def __getitem__(self, idx):
         return self.data[idx]
 
-    def bucketing(self, local_rank, world_size):
-        num_files = 0
-        # Only one rank handles the dataset
-        if local_rank == 0 or world_size == 1:
-            bucket_files = []
-            os.makedirs(CACHE_DIR, exist_ok=True)
-            df = self.data if isinstance(self.data, pd.DataFrame) else self.data.to_pandas()
-            df['bucket'] = pd.cut(df['token_count'], bins=BUCKET_SIZE,
-                                labels=range(len(BUCKET_SIZE) - 1), ordered=False)
-            label_column = self.model_name if self.model_name in df else 'labels'
-            for i, group_df in df.groupby('bucket', observed=True):
-                bsz = BUCKET_BATCH_SIZE[i]
-                # Shuffle
-                group_df = group_df.sample(frac=1, random_state=42)
-                # Divide the DataFrame if it is too large
-                for start in range(0, len(group_df), NUM_INSTANCES_PER_FILE):
-                    cache_file = os.path.join(CACHE_DIR, f"bucket_{num_files}.parquet")
-                    num_files += 1
+    # def bucketing(self, local_rank, world_size):
+    #     num_files = 0
+    #     # Only one rank handles the dataset
+    #     if local_rank == 0 or world_size == 1:
+    #         bucket_files = []
+    #         os.makedirs(CACHE_DIR, exist_ok=True)
+    #         df = self.data if isinstance(self.data, pd.DataFrame) else self.data.to_pandas()
+    #         df['bucket'] = pd.cut(df['token_count'], bins=BUCKET_SIZE,
+    #                             labels=range(len(BUCKET_SIZE) - 1), ordered=False)
+    #         label_column = self.model_name if self.model_name in df else 'labels'
+    #         for i, group_df in df.groupby('bucket', observed=True):
+    #             bsz = BUCKET_BATCH_SIZE[i]
+    #             # Shuffle
+    #             group_df = group_df.sample(frac=1, random_state=42)
+    #             # Divide the DataFrame if it is too large
+    #             for start in range(0, len(group_df), NUM_INSTANCES_PER_FILE):
+    #                 cache_file = os.path.join(CACHE_DIR, f"bucket_{num_files}.parquet")
+    #                 num_files += 1
 
-                    # Delete cache
-                    if os.path.exists(cache_file):
-                        os.remove(cache_file)
+    #                 # Delete cache
+    #                 if os.path.exists(cache_file):
+    #                     os.remove(cache_file)
 
-                    df = group_df.iloc[start: start + NUM_INSTANCES_PER_FILE]
-                    max_length = df['token_count'].max()
-                    df = df.apply(pad_tokens, axis=1, result_type='expand',
-                                            args=(max_length, self.max_input_length,
-                                            label_column, self.tokenizer.pad_token_id))
-                    df.to_parquet(cache_file, index=False)
-                    bucket_files.append((bsz, cache_file))
+    #                 df = group_df.iloc[start: start + NUM_INSTANCES_PER_FILE]
+    #                 max_length = df['token_count'].max()
+    #                 df = df.apply(pad_tokens, axis=1, result_type='expand',
+    #                                         args=(max_length, self.max_input_length,
+    #                                         label_column, self.tokenizer.pad_token_id))
+    #                 df.to_parquet(cache_file, index=False)
+    #                 bucket_files.append((bsz, cache_file))
 
-        # Synchronize
-        if world_size > 1:
-            # First broadcast the number of files
-            n = tensor(num_files, dtype=torch.long, device='cuda')
-            torch.distributed.broadcast(n, src=0)
-            if local_rank != 0:
-                bucket_files = [None] * n.item()
+    #     # Synchronize
+    #     if world_size > 1:
+    #         # First broadcast the number of files
+    #         n = tensor(num_files, dtype=torch.long, device='cuda')
+    #         torch.distributed.broadcast(n, src=0)
+    #         if local_rank != 0:
+    #             bucket_files = [None] * n.item()
 
-            # Then broadcast the file list
-            torch.distributed.broadcast_object_list(bucket_files, src=0)
+    #         # Then broadcast the file list
+    #         torch.distributed.broadcast_object_list(bucket_files, src=0)
         
-        return bucket_files
+    #     return bucket_files
     
     @classmethod
     def scorer(self, example, method):

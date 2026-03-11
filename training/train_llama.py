@@ -22,19 +22,23 @@ local_rank = int(os.getenv('LOCAL_RANK', '0'))
 device = torch.device(f'cuda:{local_rank}')
 # The time for preprocessing datasets may be long, so we extend the time limit.
 deepspeed.init_distributed(timeout=datetime.timedelta(seconds=7200))
-ds_config = json.load(open("ds_config.json"))
+ds_config = json.load(open("ds_llama_config.json"))
 model_engine, optimizer, _, _ = deepspeed.initialize(
     model=model,
     config=ds_config
 )
 model_engine.train()
 global_steps = 0
+loss = torch.tensor(0.0)
+
 # Load checkpoint if exists
 if ds_config["ckpt_folder"] is not None:
     _, client_sd = model_engine.load_checkpoint(ds_config["ckpt_folder"])
-    global_steps = client_sd.get("step", 0)
-    name = client_sd["dataset_name"]
-    TRAIN_DATASETS = TRAIN_DATASETS[TRAIN_DATASETS.index(name) + 1:]
+    if client_sd is not None:
+        global_steps = client_sd.get("step", 0)
+        name = client_sd["dataset_name"]
+        if name in TRAIN_DATASETS:
+            TRAIN_DATASETS = TRAIN_DATASETS[TRAIN_DATASETS.index(name) + 1:]
     # Freeze the original model parameters
     for param in model_engine.language_model.parameters():
         param.requires_grad = False
@@ -46,44 +50,86 @@ if ds_config["ckpt_folder"] is not None:
 
 # Initialize the dataset and dataloader
 for dataset in TRAIN_DATASETS:
-    ds = DATASET_DICT[dataset](model_name, split="train")
+    ds = DATASET_DICT[dataset](model_name, split="train_sft")
+    tokenized_ds = ds.data
     # Divide the dataset based on the length of context
-    for bsz, file in ds.bucketing(local_rank, world_size):
-        data_loader = DataLoader(
-            Dataset.from_parquet(file),
-            collate_fn=collate_fn,
-            batch_size=bsz,
-            shuffle=False, # We have already shuffled in `ds.bucketing()`
-            num_workers=max(CPU_NUM // world_size, 1),
-            drop_last=False
-        )
-        # The micro batch size of dataloaders is different,
-        # so we accumulate the gradients accordingly.
-        gc_step = ds_config["train_batch_size"] // model_engine.dp_world_size //  \
-                ds_config["gradient_accumulation_steps"] // bsz
-        for step, batch in enumerate(data_loader):
-            batch = {k: v.to(device) for k, v in batch.items()}
-            outputs = model_engine(**batch)
-            loss = outputs.loss
-            model_engine.backward(loss)
-            if (step + 1) % gc_step == 0:
-                model_engine.step()
-                global_steps += 1
-                if global_steps % 100 == 0:
-                    with open("training_loss.csv", "a") as f:
-                        f.write(f"{dataset},{step},{loss.item()}\n")
+    # for bsz, file in ds.bucketing(local_rank, world_size):
+    #     data_loader = DataLoader(
+    #         Dataset.from_parquet(file),
+    #         collate_fn=collate_fn,
+    #         batch_size=bsz,
+    #         shuffle=False, # We have already shuffled in `ds.bucketing()`
+    #         num_workers=max(CPU_NUM // world_size, 1),
+    #         drop_last=False
+    #     )
+    #     # The micro batch size of dataloaders is different,
+    #     # so we accumulate the gradients accordingly.
+    #     gc_step = ds_config["train_batch_size"] // model_engine.dp_world_size //  \
+    #             ds_config["gradient_accumulation_steps"] // bsz
+    #     for step, batch in enumerate(data_loader):
+    #         batch = {k: v.to(device) for k, v in batch.items()}
+    #         outputs = model_engine(**batch)
+    #         loss = outputs.loss
+    #         model_engine.backward(loss)
+    #         if (step + 1) % gc_step == 0:
+    #             model_engine.step()
+    #             global_steps += 1
+    #             if global_steps % 100 == 0:
+    #                 with open("training_loss.csv", "a") as f:
+    #                     f.write(f"{dataset},{step},{loss.item()}\n")
+    
+        # model_engine.step()
+        # # Save checkpoint and parameters
+        # model_engine.eval()
+        # with deepspeed.zero.GatheredParameters(model_engine.module.parameters(),
+        #                                     modifier_rank=0):
+        #     if local_rank == 0:
+        #         output_dir = f"/data3/junhaohu/model/CombLlama-11B-Instruct({loss.item()})"
+        #         model_engine.module.save_pretrained(output_dir)
 
+        # torch.distributed.barrier(device_ids=[local_rank])
+        # model_engine.train()
+    
+    sampler = torch.utils.data.DistributedSampler(
+        tokenized_ds, 
+        num_replicas=world_size, 
+        rank=local_rank, 
+        shuffle=True
+    )
+
+    data_loader = DataLoader(
+        tokenized_ds,
+        collate_fn=collate_fn,
+        batch_size=1,
+        sampler=sampler,
+        num_workers=max(CPU_NUM // world_size, 1),
+        drop_last=False
+    )
+    
+    for step, batch in enumerate(data_loader):
+        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+
+        outputs = model_engine(**batch)
+        loss = outputs.loss
+        model_engine.backward(loss)
+        
         model_engine.step()
-        # Save checkpoint and parameters
-        model_engine.eval()
-        with deepspeed.zero.GatheredParameters(model_engine.module.parameters(),
-                                            modifier_rank=0):
-            if local_rank == 0:
-                output_dir = f"/data3/junhaohu/model/CombLlama-11B-Instruct({loss.item()})"
-                model_engine.module.save_pretrained(output_dir)
 
-        torch.distributed.barrier(device_ids=[local_rank])
-        model_engine.train()
+        if model_engine.is_gradient_accumulation_boundary():
+            global_steps += 1
+            if global_steps % 100 == 0 and local_rank == 0:
+                with open("training_loss.csv", "a") as f:
+                    f.write(f"{dataset},{global_steps},{loss.item()}\n")
+    
+    model_engine.eval()
+    with deepspeed.zero.GatheredParameters(model_engine.module.parameters(),
+                                        modifier_rank=0):
+        if local_rank == 0:
+            output_dir = f"/data3/junhaohu/model/CombLlama-11B-Instruct({loss.item()})"
+            model_engine.module.save_pretrained(output_dir)
 
     model_engine.save_checkpoint("/data3/junhaohu/checkpoints/CombLlama-11B-Instruct",
             dataset, client_state={"dataset_name": dataset, "step": global_steps})
+    
+    torch.distributed.barrier(device_ids=[local_rank])
+    model_engine.train()

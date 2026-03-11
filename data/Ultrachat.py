@@ -95,23 +95,21 @@ class UltrachatDataset(DatasetBase):
     def _adjust_format(self):
         ds_new = []
         for sample in self.data:
-            if len(sample['encoder_input']) == 1:
+            for i in range(len(sample['encoder_input'])):
+                if len (sample['decoder_input'][i]) == 1:
+                    continue
+                if len(sample['encoder_input'][i][0]) == 0:
+                    sample['encoder_input'][i] = sample['encoder_input'][i][1:]
+                sample['label'][i] = sample['label'][i] + [-100]
+                sample['label'][i] = sample['label'][i][1:]
                 ds_new.append({
-                    "messages": list(sample['messages']),
+                    # "messages": list(sample['messages']),
                     "token_length": sample['token_length'],
-                    "encoder_input": list(sample['encoder_input'][0]),
-                    "decoder_input": list(sample['decoder_input'][0]),
-                    "label": list(sample['label'][0])
+                    "chunk_num": len(sample['encoder_input'][i]),
+                    "chunk_ids": list(sample['encoder_input'][i]),
+                    "input_ids": list(sample['decoder_input'][i]),
+                    "shift_labels": list(sample['label'][i])
                 })
-            else:
-                for i in range(len(sample['encoder_input'])):
-                    ds_new.append({
-                        "messages": list(sample['messages']),
-                        "token_length": sample['token_length'],
-                        "encoder_input": list(sample['encoder_input'][i]),
-                        "decoder_input": list(sample['decoder_input'][i]),
-                        "label": list(sample['label'][i])
-                    })
         return Dataset.from_list(ds_new)
 
 if __name__ == "__main__":

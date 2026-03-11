@@ -14,11 +14,12 @@ from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from transformers.models.llama.modeling_llama import LlamaRMSNorm, LlamaMLP, \
-            LlamaRotaryEmbedding, LlamaDecoderLayer, eager_attention_forward
+            LlamaRotaryEmbedding, LlamaDecoderLayer, apply_rotary_pos_emb
 from transformers.processing_utils import Unpack
 from transformers.utils import TransformersKwargs, auto_docstring, \
             can_return_tuple, is_torch_flex_attn_available, logging
 from typing import Callable, List, Optional, Tuple, Union
+from flash_attn import flash_attn_varlen_func
 
 if is_torch_flex_attn_available():
     from torch.nn.attention.flex_attention import BlockMask
@@ -120,64 +121,115 @@ class CrossAttention(nn.Module):
         hidden_states: torch.Tensor,
         cross_attention_states: Optional[torch.Tensor] = None,
         past_key_value: Optional[Cache] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        output_attentions: bool = False,
         cache_position: Optional[torch.LongTensor] = None,
+        cu_seqlens_q: Optional[torch.Tensor] = None,
+        cu_seqlens_k: Optional[torch.Tensor] = None,
+        max_seqlen_q: Optional[int] = None,
+        max_seqlen_k: Optional[int] = None,
         **kwargs,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-        """Input shape: Batch x SeqLen x HiddenSize"""
-        bsz, q_len, _ = hidden_states.size()
-        query_states = self.q_proj(hidden_states)
-        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+        """Input shape: 1 x Total_Q x HiddenSize"""
+        query_states = self.q_proj(hidden_states).view(-1, self.num_heads, self.head_dim)
         query_states = self.q_norm(query_states)
-
+        
         if cross_attention_states is not None:
             key_states, value_states = cross_attention_states
             key_states = self.k_norm(key_states)
             if past_key_value is not None and past_key_value.get_seq_length(self.layer_idx) == 0:
-                # if we have a new chunk, we update the cross key states and use it!
-                key_states, value_states = past_key_value.update(
-                    key_states, value_states, self.layer_idx, {"cache_position": cache_position}
-                )
-        elif cache_position[0] != 0:
-            key_states, value_states = (
-                past_key_value.layers[self.layer_idx].keys,
-                past_key_value.layers[self.layer_idx].values,
-            )
+                k_4d, v_4d = key_states.transpose(0, 1).unsqueeze(0), value_states.transpose(0, 1).unsqueeze(0)
+                k_4d, v_4d = past_key_value.update(k_4d, v_4d, self.layer_idx, {"cache_position": cache_position})
+                key_states, value_states = k_4d.squeeze(0).transpose(0, 1), v_4d.squeeze(0).transpose(0, 1)
+                # key_states, value_states = past_key_value.update(
+                #     key_states, value_states, self.layer_idx, {"cache_position": cache_position}
+                # )
+        elif cache_position is not None and cache_position[0] != 0:
+            key_states = past_key_value.layers[self.layer_idx].keys.squeeze(0).transpose(0, 1)
+            value_states = past_key_value.layers[self.layer_idx].values.squeeze(0).transpose(0, 1)
         else:
             raise ValueError(
                 "Cross attention layer can't find neither `cross_attn_states` nor cached values for key/values!"
             )
-
-        attention_interface: Callable = eager_attention_forward
-
-        if self.config._attn_implementation != "eager":
-            if self.config._attn_implementation == "sdpa" and output_attentions:
-                logger.warning_once(
-                    "`torch.nn.functional.scaled_dot_product_attention` does not support `output_attentions=True`. Falling back to "
-                    'eager attention. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
-                )
-            else:
-                attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
-
-        attn_output, attn_weights = attention_interface(
-            self,
+            
+        attn_output = flash_attn_varlen_func(
             query_states,
             key_states,
             value_states,
-            attention_mask,
-            dropout=0.0,
-            scaling=self.scaling,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_k=cu_seqlens_k,
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_k=max_seqlen_k,
+            dropout_p=0.0,
+            softmax_scale=self.scaling,
+            causal=False,
             **kwargs,
         )
-
-        attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()
+        
+        attn_output = attn_output.view(1, hidden_states.shape[1], -1)
         attn_output = self.o_proj(attn_output)
+        
+        return attn_output, None, past_key_value
 
-        if not output_attentions:
-            attn_weights = None
+class ChunkVarlenAttention(nn.Module):
+    """Attention Mechanism for the Chunk Model, which processes variable-length chunks with flash attention."""
+    def __init__(self, config):
+        super().__init__()
+        self.num_heads = config.num_attention_heads
+        self.num_kv_heads = config.num_key_value_heads
+        self.head_dim = config.hidden_size // self.num_heads
+        self.scaling = self.head_dim ** -0.5
 
-        return attn_output, attn_weights
+        self.q_proj = nn.Linear(config.hidden_size, self.num_heads * self.head_dim, bias=False)
+        self.k_proj = nn.Linear(config.hidden_size, self.num_kv_heads * self.head_dim, bias=False)
+        self.v_proj = nn.Linear(config.hidden_size, self.num_kv_heads * self.head_dim, bias=False)
+        self.o_proj = nn.Linear(self.num_heads * self.head_dim, config.hidden_size, bias=False)
+
+    def forward(self, hidden_states, cos, sin, cu_seqlens, max_seqlen):
+        # Project to Q/K/V spaces and transform to 3D: [Total_tokens, num_heads, head_dim]
+        q = self.q_proj(hidden_states).view(-1, self.num_heads, self.head_dim)
+        k = self.k_proj(hidden_states).view(-1, self.num_kv_heads, self.head_dim)
+        v = self.v_proj(hidden_states).view(-1, self.num_kv_heads, self.head_dim)
+
+        # Apply RoPE
+        q, k = apply_rotary_pos_emb(q.unsqueeze(0), k.unsqueeze(0), cos, sin)
+        q, k = q.squeeze(0), k.squeeze(0)
+
+        # Flash Attention Varlen
+        attn_output = flash_attn_varlen_func(
+            q, k, v,
+            cu_seqlens_q=cu_seqlens,
+            cu_seqlens_k=cu_seqlens,
+            max_seqlen_q=max_seqlen,
+            max_seqlen_k=max_seqlen,
+            dropout_p=0.0,
+            softmax_scale=self.scaling,
+            causal=True
+        )
+
+        # Return to 2D: [Total_Tokens, Hidden]
+        attn_output = attn_output.view(-1, self.num_heads * self.head_dim)
+        return self.o_proj(attn_output)
+
+class ChunkVarlenLayer(nn.Module):
+    """Decoder Layer for the Chunk Model, which consists of a self-attention layer that can handle variable-length chunks and an MLP."""
+    def __init__(self, config):
+        super().__init__()
+        self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.self_attn = ChunkVarlenAttention(config)
+        self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.mlp = LlamaMLP(config)
+
+    def forward(self, hidden_states, cos, sin, cu_seqlens, max_seqlen):
+        residual = hidden_states
+        hidden_states = self.input_layernorm(hidden_states)
+        hidden_states = self.self_attn(hidden_states, cos, sin, cu_seqlens, max_seqlen)
+        hidden_states = residual + hidden_states
+
+        residual = hidden_states
+        hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states = self.mlp(hidden_states)
+        hidden_states = residual + hidden_states
+
+        return hidden_states
 
 class CombLlamaCrossAttentionDecoderLayer(torch.nn.Module):
     """Cross-attention transformer block with tanh-gated attention and feedforward."""
@@ -198,10 +250,13 @@ class CombLlamaCrossAttentionDecoderLayer(torch.nn.Module):
         self,
         hidden_states: torch.Tensor,
         cross_attention_states: torch.Tensor,
-        cross_attention_mask: torch.Tensor,
+        # cross_attention_mask: torch.Tensor,
         # full_text_row_masked_out_mask: Tuple[torch.Tensor, torch.Tensor],
+        cu_seqlens_q: torch.Tensor,
+        cu_seqlens_k: torch.Tensor,
+        max_seqlen_q: int,
+        max_seqlen_k: int,
         past_key_value: Optional[Cache] = None,
-        output_attentions: Optional[bool] = False,
         cache_position: Optional[torch.LongTensor] = None,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[torch.Tensor]:
@@ -210,10 +265,12 @@ class CombLlamaCrossAttentionDecoderLayer(torch.nn.Module):
 
         hidden_states, attn_weights = self.cross_attn(
             hidden_states=hidden_states,
-            attention_mask=cross_attention_mask,
             cross_attention_states=cross_attention_states,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_k=cu_seqlens_k,
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_k=max_seqlen_k,
             past_key_value=past_key_value,
-            output_attentions=output_attentions,
             cache_position=cache_position,
             **kwargs,
         )
@@ -222,14 +279,9 @@ class CombLlamaCrossAttentionDecoderLayer(torch.nn.Module):
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
-        # if full_text_row_masked_out_mask is not None:
-        #     hidden_states = full_text_row_masked_out_mask[:, 0] * hidden_states  # type: ignore
         hidden_states = residual + self.cross_attn_mlp_gate.tanh() * hidden_states
 
         outputs = (hidden_states,)
-
-        if output_attentions:
-            outputs += (attn_weights,)
 
         return outputs
 
@@ -243,11 +295,11 @@ class CombLlamaPreTrainedModel(PreTrainedModel):
         "CombLlamaCrossAttentionDecoderLayer",
         "LlamaDecoderLayer",
     ]
-    _can_compile_fullgraph = False  # static cache cannot have different shapes for each layer
-    _supports_sdpa = True
+    # _can_compile_fullgraph = False  # static cache cannot have different shapes for each layer
+    # _supports_sdpa = True
     _supports_flash_attn = True
-    _supports_flex_attn = True
-    _supports_attention_backend = True
+    # _supports_flex_attn = True
+    # _supports_attention_backend = True
 
     def _init_weights(self, module):
         std = getattr(self.config, "initializer_range", self.config.get_text_config().initializer_range)
@@ -269,130 +321,130 @@ class CombLlamaPreTrainedModel(PreTrainedModel):
             module.cross_attn_attn_gate.data.zero_()
             module.cross_attn_mlp_gate.data.zero_()
 
-    # Copied from transformers.models.gptj.modeling_gptj.GPTJModel._update_causal_mask
-    def _update_causal_mask(
-        self,
-        attention_mask: Union[torch.Tensor, "BlockMask"],
-        input_tensor: torch.Tensor,
-        cache_position: torch.Tensor,
-        past_key_values: Cache,
-        output_attentions: bool = False,
-    ):
-        if self.config._attn_implementation == "flash_attention_2":
-            if attention_mask is not None and (attention_mask == 0.0).any():
-                return attention_mask
-            return None
-        if self.config._attn_implementation == "flex_attention":
-            if isinstance(attention_mask, torch.Tensor):
-                attention_mask = make_flex_block_causal_mask(attention_mask)
-            return attention_mask
+    # # Copied from transformers.models.gptj.modeling_gptj.GPTJModel._update_causal_mask
+    # def _update_causal_mask(
+    #     self,
+    #     attention_mask: Union[torch.Tensor, "BlockMask"],
+    #     input_tensor: torch.Tensor,
+    #     cache_position: torch.Tensor,
+    #     past_key_values: Cache,
+    #     output_attentions: bool = False,
+    # ):
+    #     if self.config._attn_implementation == "flash_attention_2":
+    #         if attention_mask is not None and (attention_mask == 0.0).any():
+    #             return attention_mask
+    #         return None
+    #     if self.config._attn_implementation == "flex_attention":
+    #         if isinstance(attention_mask, torch.Tensor):
+    #             attention_mask = make_flex_block_causal_mask(attention_mask)
+    #         return attention_mask
 
-        # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument, in
-        # order to dispatch on Flash Attention 2. This feature is not compatible with static cache, as SDPA will fail
-        # to infer the attention mask.
-        past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-        using_compilable_cache = past_key_values.is_compileable if past_key_values is not None else False
+    #     # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument, in
+    #     # order to dispatch on Flash Attention 2. This feature is not compatible with static cache, as SDPA will fail
+    #     # to infer the attention mask.
+    #     past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+    #     using_compilable_cache = past_key_values.is_compileable if past_key_values is not None else False
 
-        # When output attentions is True, sdpa implementation's forward method calls the eager implementation's forward
-        if self.config._attn_implementation == "sdpa" and not using_compilable_cache and not output_attentions:
-            if AttentionMaskConverter._ignore_causal_mask_sdpa(
-                attention_mask,
-                inputs_embeds=input_tensor,
-                past_key_values_length=past_seen_tokens,
-                is_training=self.training,
-            ):
-                return None
+    #     # When output attentions is True, sdpa implementation's forward method calls the eager implementation's forward
+    #     if self.config._attn_implementation == "sdpa" and not using_compilable_cache and not output_attentions:
+    #         if AttentionMaskConverter._ignore_causal_mask_sdpa(
+    #             attention_mask,
+    #             inputs_embeds=input_tensor,
+    #             past_key_values_length=past_seen_tokens,
+    #             is_training=self.training,
+    #         ):
+    #             return None
 
-        dtype = input_tensor.dtype
-        sequence_length = input_tensor.shape[1]
-        if using_compilable_cache:
-            target_length = past_key_values.get_max_cache_shape()
-        else:
-            target_length = (
-                attention_mask.shape[-1]
-                if isinstance(attention_mask, torch.Tensor)
-                else past_seen_tokens + sequence_length + 1
-            )
+    #     dtype = input_tensor.dtype
+    #     sequence_length = input_tensor.shape[1]
+    #     if using_compilable_cache:
+    #         target_length = past_key_values.get_max_cache_shape()
+    #     else:
+    #         target_length = (
+    #             attention_mask.shape[-1]
+    #             if isinstance(attention_mask, torch.Tensor)
+    #             else past_seen_tokens + sequence_length + 1
+    #         )
 
-        # In case the provided `attention` mask is 2D, we generate a causal mask here (4D).
-        causal_mask = self._prepare_4d_causal_attention_mask_with_cache_position(
-            attention_mask,
-            sequence_length=sequence_length,
-            target_length=target_length,
-            dtype=dtype,
-            cache_position=cache_position,
-            batch_size=input_tensor.shape[0],
-        )
+    #     # In case the provided `attention` mask is 2D, we generate a causal mask here (4D).
+    #     causal_mask = self._prepare_4d_causal_attention_mask_with_cache_position(
+    #         attention_mask,
+    #         sequence_length=sequence_length,
+    #         target_length=target_length,
+    #         dtype=dtype,
+    #         cache_position=cache_position,
+    #         batch_size=input_tensor.shape[0],
+    #     )
 
-        if (
-            self.config._attn_implementation == "sdpa"
-            and attention_mask is not None
-            and attention_mask.device.type in ["cuda", "xpu", "npu"]
-            and not output_attentions
-        ):
-            # Attend to all tokens in fully masked rows in the causal_mask, for example the relevant first rows when
-            # using left padding. This is required by F.scaled_dot_product_attention memory-efficient attention path.
-            # Details: https://github.com/pytorch/pytorch/issues/110213
-            min_dtype = torch.finfo(dtype).min
-            causal_mask = AttentionMaskConverter._unmask_unattended(causal_mask, min_dtype)
+    #     if (
+    #         self.config._attn_implementation == "sdpa"
+    #         and attention_mask is not None
+    #         and attention_mask.device.type in ["cuda", "xpu", "npu"]
+    #         and not output_attentions
+    #     ):
+    #         # Attend to all tokens in fully masked rows in the causal_mask, for example the relevant first rows when
+    #         # using left padding. This is required by F.scaled_dot_product_attention memory-efficient attention path.
+    #         # Details: https://github.com/pytorch/pytorch/issues/110213
+    #         min_dtype = torch.finfo(dtype).min
+    #         causal_mask = AttentionMaskConverter._unmask_unattended(causal_mask, min_dtype)
 
-        return causal_mask
+    #     return causal_mask
 
-    @staticmethod
-    # Copied from transformers.models.gptj.modeling_gptj.GPTJModel._prepare_4d_causal_attention_mask_with_cache_position
-    def _prepare_4d_causal_attention_mask_with_cache_position(
-        attention_mask: torch.Tensor,
-        sequence_length: int,
-        target_length: int,
-        dtype: torch.dtype,
-        cache_position: torch.Tensor,
-        batch_size: int,
-        **kwargs,
-    ):
-        """
-        Creates a causal 4D mask of shape `(batch_size, 1, query_length, key_value_length)` from a 2D mask of shape
-        `(batch_size, key_value_length)`, or if the input `attention_mask` is already 4D, do nothing.
+    # @staticmethod
+    # # Copied from transformers.models.gptj.modeling_gptj.GPTJModel._prepare_4d_causal_attention_mask_with_cache_position
+    # def _prepare_4d_causal_attention_mask_with_cache_position(
+    #     attention_mask: torch.Tensor,
+    #     sequence_length: int,
+    #     target_length: int,
+    #     dtype: torch.dtype,
+    #     cache_position: torch.Tensor,
+    #     batch_size: int,
+    #     **kwargs,
+    # ):
+    #     """
+    #     Creates a causal 4D mask of shape `(batch_size, 1, query_length, key_value_length)` from a 2D mask of shape
+    #     `(batch_size, key_value_length)`, or if the input `attention_mask` is already 4D, do nothing.
 
-        Args:
-            attention_mask (`torch.Tensor`):
-                A 2D attention mask of shape `(batch_size, key_value_length)` or a 4D attention mask of shape
-                `(batch_size, 1, query_length, key_value_length)`.
-            sequence_length (`int`):
-                The sequence length being processed.
-            target_length (`int`):
-                The target length: when generating with static cache, the mask should be as long as the static cache,
-                to account for the 0 padding, the part of the cache that is not filled yet.
-            dtype (`torch.dtype`):
-                The dtype to use for the 4D attention mask.
-            cache_position (`torch.Tensor`):
-                Indices depicting the position of the input sequence tokens in the sequence.
-            batch_size (`torch.Tensor`):
-                Batch size.
-        """
-        if attention_mask is not None and attention_mask.dim() == 4:
-            # In this case we assume that the mask comes already in inverted form and requires no inversion or slicing.
-            causal_mask = attention_mask
-        else:
-            min_dtype = torch.finfo(dtype).min
-            causal_mask = torch.full(
-                (sequence_length, target_length), fill_value=min_dtype, dtype=dtype, device=cache_position.device
-            )
-            if sequence_length != 1:
-                causal_mask = torch.triu(causal_mask, diagonal=1)
-            causal_mask *= torch.arange(target_length, device=cache_position.device) > cache_position.reshape(-1, 1)
-            causal_mask = causal_mask[None, None, :, :].expand(batch_size, 1, -1, -1)
-            if attention_mask is not None:
-                causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
-                mask_length = attention_mask.shape[-1]
-                padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :].to(
-                    causal_mask.device
-                )
-                padding_mask = padding_mask == 0
-                causal_mask[:, :, :, :mask_length] = causal_mask[:, :, :, :mask_length].masked_fill(
-                    padding_mask, min_dtype
-                )
+    #     Args:
+    #         attention_mask (`torch.Tensor`):
+    #             A 2D attention mask of shape `(batch_size, key_value_length)` or a 4D attention mask of shape
+    #             `(batch_size, 1, query_length, key_value_length)`.
+    #         sequence_length (`int`):
+    #             The sequence length being processed.
+    #         target_length (`int`):
+    #             The target length: when generating with static cache, the mask should be as long as the static cache,
+    #             to account for the 0 padding, the part of the cache that is not filled yet.
+    #         dtype (`torch.dtype`):
+    #             The dtype to use for the 4D attention mask.
+    #         cache_position (`torch.Tensor`):
+    #             Indices depicting the position of the input sequence tokens in the sequence.
+    #         batch_size (`torch.Tensor`):
+    #             Batch size.
+    #     """
+    #     if attention_mask is not None and attention_mask.dim() == 4:
+    #         # In this case we assume that the mask comes already in inverted form and requires no inversion or slicing.
+    #         causal_mask = attention_mask
+    #     else:
+    #         min_dtype = torch.finfo(dtype).min
+    #         causal_mask = torch.full(
+    #             (sequence_length, target_length), fill_value=min_dtype, dtype=dtype, device=cache_position.device
+    #         )
+    #         if sequence_length != 1:
+    #             causal_mask = torch.triu(causal_mask, diagonal=1)
+    #         causal_mask *= torch.arange(target_length, device=cache_position.device) > cache_position.reshape(-1, 1)
+    #         causal_mask = causal_mask[None, None, :, :].expand(batch_size, 1, -1, -1)
+    #         if attention_mask is not None:
+    #             causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
+    #             mask_length = attention_mask.shape[-1]
+    #             padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :].to(
+    #                 causal_mask.device
+    #             )
+    #             padding_mask = padding_mask == 0
+    #             causal_mask[:, :, :, :mask_length] = causal_mask[:, :, :, :mask_length].masked_fill(
+    #                 padding_mask, min_dtype
+    #             )
 
-        return causal_mask
+    #     return causal_mask
 
 class CombLlamaChunkModel(CombLlamaPreTrainedModel):
     config_class = CombLlamaConfig
@@ -405,10 +457,9 @@ class CombLlamaChunkModel(CombLlamaPreTrainedModel):
         self.hidden_size = config.hidden_size
         self.head_dim = self.hidden_size // config.num_attention_heads
         self.num_key_value_heads = config.num_key_value_heads
-        self.num_key_value_groups = config.num_attention_heads // self.num_key_value_heads
         self.embed_tokens = nn.Embedding(config.vocab_size, self.hidden_size, config.pad_token_id)
-        self.layers = nn.ModuleList([LlamaDecoderLayer(config, layer_idx)
-                                for layer_idx in range(self.num_cross_layers)])
+        self.layers = nn.ModuleList([ChunkVarlenLayer(config)
+                                for _ in range(self.num_cross_layers)])
         self.rotary_emb = LlamaRotaryEmbedding(config=config)
         self.k_proj = nn.ModuleList([
             nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
@@ -423,31 +474,38 @@ class CombLlamaChunkModel(CombLlamaPreTrainedModel):
     def forward(
         self,
         chunk_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        cu_seqlens_chunk: torch.Tensor,
+        max_seqlen_chunk: int,
+        position_ids_k: torch.Tensor,
+        **kwargs
     ):
-        bsz, l = chunk_ids.shape
-        hidden_states = self.embed_tokens(chunk_ids)
-        position_ids = torch.arange(l, device=chunk_ids.device).unsqueeze(0)
-        position_embeddings = self.rotary_emb(hidden_states, position_ids)
+        hidden_states = self.embed_tokens(chunk_ids).squeeze(0)
+        
+        cos, sin = self.rotary_emb(hidden_states.unsqueeze(0), position_ids_k)
         
         cross_attention_states = []
-        for idx, decoder_layer in enumerate(self.layers):
-            hidden_states = decoder_layer(
-                hidden_states,
-                attention_mask=attention_mask,
-                position_embeddings=position_embeddings
+        
+        for idx, layer in enumerate(self.layers):
+            hidden_states = layer(
+                hidden_states, 
+                cos, 
+                sin, 
+                cu_seqlens_chunk, 
+                max_seqlen_chunk
             )
-            key_states = self.k_proj[idx](hidden_states)
-            value_states = self.v_proj[idx](hidden_states)
-            key_states = key_states.view(bsz, l, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-            value_states = value_states.view(bsz, l, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-            cross_attention_states.append((key_states, value_states))
+            
+            # Shape：[Total_KV_Tokens, num_kv_heads, head_dim]
+            k_states = self.k_proj[idx](hidden_states).view(-1, self.num_key_value_heads, self.head_dim)
+            v_states = self.v_proj[idx](hidden_states).view(-1, self.num_key_value_heads, self.head_dim)
+            
+            cross_attention_states.append((k_states, v_states))
 
         return cross_attention_states
 
 class CombLlamaTextModel(CombLlamaPreTrainedModel):
     config_class = CombLlamaConfig
     base_model_prefix = "language_model.model"
+    
     def __init__(self, config: CombLlamaConfig):
         text_config = config.get_text_config()
         super().__init__(text_config)
@@ -457,9 +515,10 @@ class CombLlamaTextModel(CombLlamaPreTrainedModel):
         self.cross_attention_layers = config.cross_attention_layers
 
         layers = [LlamaDecoderLayer(text_config, layer_idx)
-                for layer_idx in range(config.text_config.num_hidden_layers)]
+                  for layer_idx in range(config.text_config.num_hidden_layers)]
+        
         cross_layers = [CombLlamaCrossAttentionDecoderLayer(text_config, layer_idx)
-                for layer_idx in self.cross_attention_layers]
+                        for layer_idx in self.cross_attention_layers]
 
         self.layers = nn.ModuleList(layers)
         self.cross_layers = nn.ModuleList(cross_layers)
@@ -474,62 +533,24 @@ class CombLlamaTextModel(CombLlamaPreTrainedModel):
     def set_input_embeddings(self, value):
         self.embed_tokens = value
 
-    @auto_docstring
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        cross_attention_states: Optional[List[torch.FloatTensor]] = None,
-        cross_attention_mask: Optional[torch.Tensor] = None,
-        # full_text_row_masked_out_mask: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        cu_seqlens_q: Optional[torch.Tensor] = None,
+        max_seqlen_q: Optional[int] = None,
+        cross_attention_states: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
+        cu_seqlens_k: Optional[torch.Tensor] = None,
+        max_seqlen_k: Optional[int] = None,
         past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
-        **kwargs: Unpack[FlashAttentionKwargs],
+        **kwargs,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
-        """
-        The text backbone of the CombLlama model.
         
-        Args:
-            cross_attention_states (`torch.FloatTensor`, *optional*):
-                Output of the chunk model, used for cross-attention. This tensor contains the processed chunk tokens that
-                the language model will attend to.
-            cross_attention_mask (`torch.Tensor` of shape `(batch_size, max_num_chunk_tokens)`, *optional*):
-                Cross-attention mask to control the interaction between text tokens and chunk tokens.
-                This 2D tensor defines which chunk tokens each text token should attend to.
-
-                For each chunk token (in max_num_chunk_tokens):
-                - 1 indicates the text tokens **should attend** to the corresponding chunk token
-                - 0 indicates the text tokens **should not attend** to the corresponding chunk token
-
-                TODO: Add support for 3D cross-attention masks, which would enable the chunk to be inserted at any position.
-
-        Returns:
-            `BaseModelOutputWithPast`.
-
-        Example:
-
-        ```python
-        >>> from transformers import AutoTokenizer
-        >>> from models.CombLlama import CombLlamaTextModel
-
-        >>> checkpoint = "models/final_model/CombLlama-9B-Instruct"
-        >>> model = CombLlamaTextModel.from_pretrained(checkpoint)
-        >>> tokenizer = AutoTokenizer.from_pretrained(checkpoint)
-
-        >>> text = "If I had to write a haiku, it would be:"
-        >>> inputs = tokenizer(text=text, return_tensors="pt")
-
-        >>> output = model(**inputs)
-
-        >>> print(output.last_hidden_state.shape)
-        torch.Size([1, 13, 4096])
-        ```
-        """
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -553,76 +574,80 @@ class CombLlamaTextModel(CombLlamaPreTrainedModel):
         if use_cache and past_key_values is None:
             past_key_values = DynamicCache()
 
-        if cache_position is None:
-            past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-            cache_position = torch.arange(
-                past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
-            )
         if position_ids is None:
-            position_ids = cache_position.unsqueeze(0)
+            raise ValueError("In Continuous Batching mode, position_ids must be provided to ensure sequence isolation.")
 
-        causal_mask = self._update_causal_mask(
-            attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
-        )
-
-        # create position embeddings to be shared across the decoder layers
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
-        # decoder layers
         all_hidden_states = () if output_hidden_states else None
 
         for idx, decoder_layer in enumerate(self.layers):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
-            # Here we check whether we need to compute cross attention states.
-            # Let's check if the layer is cross attention layer and if we have cross attention states
-            # or cached cross attention states.
+            # --- 1. Cross-Attention Phase ---
             is_cross_attention_layer = idx in self.cross_attention_layers
             have_cross_attention_cache = past_key_values is not None and past_key_values.get_seq_length(idx+len(self.layers)) > 0
 
             if is_cross_attention_layer and (cross_attention_states is not None or have_cross_attention_cache):
                 cross_layer_id = self.cross_attention_layers.index(idx)
+                
                 layer_outputs = self.cross_layers[cross_layer_id](
-                    hidden_states,
+                    hidden_states=hidden_states,
                     cross_attention_states=cross_attention_states[cross_layer_id] if cross_attention_states else None,
-                    cross_attention_mask=cross_attention_mask,
-                    # full_text_row_masked_out_mask=full_text_row_masked_out_mask,
+                    cu_seqlens_q=cu_seqlens_q,
+                    cu_seqlens_k=cu_seqlens_k,
+                    max_seqlen_q=max_seqlen_q,
+                    max_seqlen_k=max_seqlen_k,
                     past_key_value=past_key_values,
-                    output_attentions=output_attentions,
                     cache_position=cache_position,
                     **kwargs,
                 )
                 hidden_states = layer_outputs[0]
-            
-            # Next, we compute the self attention layer.
+
+            # --- 2. Self-Attention Phase ---
+            def custom_self_attn_forward(hs):
+                residual = hs
+                hs = decoder_layer.input_layernorm(hs)
+
+                q = decoder_layer.self_attn.q_proj(hs).view(-1, decoder_layer.self_attn.num_heads, decoder_layer.self_attn.head_dim)
+                k = decoder_layer.self_attn.k_proj(hs).view(-1, decoder_layer.self_attn.num_key_value_heads, decoder_layer.self_attn.head_dim)
+                v = decoder_layer.self_attn.v_proj(hs).view(-1, decoder_layer.self_attn.num_key_value_heads, decoder_layer.self_attn.head_dim)
+
+                q, k = apply_rotary_pos_emb(q.unsqueeze(0), k.unsqueeze(0), *position_embeddings)
+                q, k = q.squeeze(0), k.squeeze(0)
+
+                scaling = getattr(decoder_layer.self_attn, "scaling", decoder_layer.self_attn.head_dim ** -0.5)
+                attn_output = flash_attn_varlen_func(
+                    q, k, v,
+                    cu_seqlens_q=cu_seqlens_q,
+                    cu_seqlens_k=cu_seqlens_q,
+                    max_seqlen_q=max_seqlen_q,
+                    max_seqlen_k=max_seqlen_q,
+                    dropout_p=0.0 if not self.training else self.config.attention_dropout,
+                    softmax_scale=scaling,
+                    causal=True
+                )
+
+                attn_output = attn_output.view(1, hs.shape[1], decoder_layer.self_attn.hidden_size)
+                hs = residual + decoder_layer.self_attn.o_proj(attn_output)
+
+                residual = hs
+                hs = decoder_layer.post_attention_layernorm(hs)
+                hs = decoder_layer.mlp(hs)
+                hs = residual + hs
+                return hs
+
             if self.gradient_checkpointing and self.training:
                 hidden_states = self._gradient_checkpointing_func(
-                    decoder_layer.__call__,
+                    custom_self_attn_forward,
                     hidden_states,
-                    causal_mask,
-                    position_ids,
-                    past_key_values,
-                    output_attentions,
-                    use_cache,
-                    cache_position,
-                    position_embeddings,
                 )
             else:
-                hidden_states = decoder_layer(
-                    hidden_states,
-                    attention_mask=causal_mask,
-                    position_ids=position_ids,
-                    past_key_value=past_key_values,
-                    use_cache=use_cache,
-                    cache_position=cache_position,
-                    position_embeddings=position_embeddings,
-                    **kwargs,
-                )
+                hidden_states = custom_self_attn_forward(hidden_states)
 
         hidden_states = self.norm(hidden_states)
 
-        # add hidden states from the last decoder layer
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
 
@@ -657,11 +682,7 @@ class CombLlamaForCausalLM(CombLlamaPreTrainedModel, GenerationMixin):
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        cross_attention_states: Optional[List[torch.LongTensor]] = None,
-        cross_attention_mask: Optional[torch.LongTensor] = None,
-        # full_text_row_masked_out_mask: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
@@ -671,6 +692,11 @@ class CombLlamaForCausalLM(CombLlamaPreTrainedModel, GenerationMixin):
         cache_position: Optional[torch.LongTensor] = None,
         logits_to_keep: Union[int, torch.Tensor] = 0,
         shift_labels: Optional[torch.LongTensor] = None,
+        cu_seqlens_q: Optional[torch.Tensor] = None,
+        max_seqlen_q: Optional[int] = None,
+        cross_attention_states: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
+        cu_seqlens_k: Optional[torch.Tensor] = None,
+        max_seqlen_k: Optional[int] = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> Union[tuple, CausalLMOutputWithPast]:
         r"""
@@ -734,11 +760,12 @@ class CombLlamaForCausalLM(CombLlamaPreTrainedModel, GenerationMixin):
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs = self.model(
             input_ids=input_ids,
-            cross_attention_states=cross_attention_states,
-            attention_mask=attention_mask,
             position_ids=position_ids,
-            cross_attention_mask=cross_attention_mask,
-            # full_text_row_masked_out_mask=full_text_row_masked_out_mask,
+            cu_seqlens_q=cu_seqlens_q,
+            max_seqlen_q=max_seqlen_q,
+            cross_attention_states=cross_attention_states,
+            cu_seqlens_k=cu_seqlens_k,
+            max_seqlen_k=max_seqlen_k,
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
             use_cache=use_cache,
@@ -749,13 +776,22 @@ class CombLlamaForCausalLM(CombLlamaPreTrainedModel, GenerationMixin):
         )
 
         hidden_states = outputs.last_hidden_state
-        slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
-        logits = self.lm_head(hidden_states[:, slice_indices, :]).float()
+        # slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+        # logits = self.lm_head(hidden_states[:, slice_indices, :]).float()
+        if isinstance(logits_to_keep, torch.Tensor):
+            logits = self.lm_head(hidden_states[:, logits_to_keep, :])
+        elif logits_to_keep > 0:
+            logits = self.lm_head(hidden_states[:, -logits_to_keep:, :])
+        else:
+            logits = self.lm_head(hidden_states)
+        logits = logits.float()
 
         loss = None
         if labels is not None or shift_labels is not None:
-            loss = self.loss_function(logits, labels, self.vocab_size,
-                                    shift_labels=shift_labels, **kwargs)
+            # loss = self.loss_function(logits, labels, self.vocab_size,
+            #                         shift_labels=shift_labels, **kwargs)
+            loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
+            loss = loss_fct(logits.view(-1, self.vocab_size), shift_labels.view(-1))
 
         return CausalLMOutputWithPast(
             loss=loss,
@@ -773,7 +809,7 @@ class CombLlamaForConditionalGeneration(CombLlamaPreTrainedModel, GenerationMixi
         super().__init__(config)
         self.vocab_size = config.text_config.vocab_size
         self.hidden_size = config.text_config.hidden_size
-        self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
+        # self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
         self.chunk_model = CombLlamaChunkModel._from_config(config)
         self.language_model = CombLlamaForCausalLM._from_config(config)
         self.post_init()
@@ -810,10 +846,9 @@ class CombLlamaForConditionalGeneration(CombLlamaPreTrainedModel, GenerationMixi
         self,
         input_ids: Optional[torch.LongTensor] = None,
         chunk_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        cross_attention_mask: Optional[torch.Tensor] = None,
         cross_attention_states: Optional[List[torch.Tensor]] = None,
         position_ids: Optional[torch.LongTensor] = None,
+        position_ids_k: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
@@ -823,6 +858,10 @@ class CombLlamaForConditionalGeneration(CombLlamaPreTrainedModel, GenerationMixi
         cache_position: Optional[torch.LongTensor] = None,
         logits_to_keep: Union[int, torch.Tensor] = 0,
         shift_labels: Optional[torch.LongTensor] = None,
+        cu_seqlens_q: Optional[torch.Tensor] = None,
+        max_seqlen_q: Optional[int] = None,
+        cu_seqlens_chunk: Optional[torch.Tensor] = None,
+        max_seqlen_chunk: Optional[int] = None,
         **kwargs,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""
@@ -904,29 +943,18 @@ class CombLlamaForConditionalGeneration(CombLlamaPreTrainedModel, GenerationMixi
         if chunk_ids is not None and cross_attention_states is not None:
             raise ValueError("`chunk_ids` and `cross_attention_states` cannot be provided simultaneously")
 
-        if cross_attention_mask is not None:
-            # invert the mask
-            inverted_cross_attn_mask = (1.0 - cross_attention_mask).to(self.dtype)
-            cross_attention_mask = inverted_cross_attn_mask.masked_fill(
-                inverted_cross_attn_mask.to(torch.bool), torch.finfo(self.dtype).min
-            )
-            
-            # reshape so it can be used by attn module
-            cross_attention_mask = cross_attention_mask.unsqueeze(1).unsqueeze(1)
-        # else:
-        #     full_text_row_masked_out_mask = None
-
         if chunk_ids is not None:
             # get chunk tokens from chunk model
-            cross_attention_states = self.chunk_model(chunk_ids, cross_attention_mask)
+            cross_attention_states = self.chunk_model(chunk_ids, cu_seqlens_chunk, max_seqlen_chunk, position_ids_k)
 
         outputs = self.language_model(
             input_ids=input_ids,
-            attention_mask=attention_mask,
             position_ids=position_ids,
+            cu_seqlens_q=cu_seqlens_q,
+            max_seqlen_q=max_seqlen_q,
+            cu_seqlens_k=cu_seqlens_chunk,
+            max_seqlen_k=max_seqlen_chunk,
             cross_attention_states=cross_attention_states,
-            cross_attention_mask=cross_attention_mask,
-            # full_text_row_masked_out_mask=full_text_row_masked_out_mask,
             past_key_values=past_key_values,
             use_cache=use_cache,
             inputs_embeds=inputs_embeds,
@@ -942,8 +970,10 @@ class CombLlamaForConditionalGeneration(CombLlamaPreTrainedModel, GenerationMixi
         logits = outputs.logits
 
         if labels is not None or shift_labels is not None:
-            loss = self.loss_function(logits, labels, self.vocab_size,
-                                    shift_labels=shift_labels, **kwargs)
+            # loss = self.loss_function(logits, labels, self.vocab_size,
+            #                         shift_labels=shift_labels, **kwargs)
+            loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
+            loss = loss_fct(logits.view(-1, self.vocab_size), shift_labels.view(-1))
 
         return CausalLMOutputWithPast(
             loss=loss,

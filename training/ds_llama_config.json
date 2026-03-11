@@ -1,5 +1,6 @@
 {
     "train_batch_size": 128,
+    "train_micro_batch_size_per_gpu": 1,
     "gradient_accumulation_steps": 16,
     "bf16": {"enabled": true},
     "optimizer": {
@@ -21,13 +22,7 @@
         "enabled": true,
         "job_name": "comb_training"
     },
-    "tensor_parallel": {
-        "autotp_size": 4,
-        "tensor_parallel": {
-            "tp_size": 4
-        }
-    },
-    "ckpt_folder": null,
+    "ckpt_folder": "/data3/junhaohu/checkpoints/CombLlama-11B-Instruct",
     "zero_optimization": {
         "stage": 2,
         "offload_optimizer": {
@@ -35,6 +30,10 @@
             "pin_memory": true
         },
         "overlap_comm": true,
-        "gather_16bit_weights_on_model_save": true
-    }
+        "gather_16bit_weights_on_model_save": true,
+        "reduce_scatter": true,
+        "contiguous_gradients": true
+    },
+    "gradient_clipping": 1.0,
+    "steps_per_print": 10
 }
