@@ -1,116 +1,136 @@
 """This file processes the Ultrachat dataset."""
 
-from datasets import Dataset
+from datasets import Features, Sequence, Value
 from datasets import load_dataset, load_from_disk
-from data.base import DatasetBase, CPU_NUM
-from data.base import HF_HOME
+from data.base import DatasetBase, CPU_NUM, HF_HOME
+
+EOT_TOKEN_ID = 128009  # <|eot_id|>
+CHUNK_THRESHOLD = 1024
+
 
 class UltrachatDataset(DatasetBase):
     name = "ultrachat_200k"
 
     def _init_data(self, split):
+        features = Features({
+            "token_length": Value("int64"),
+            "chunk_num": Value("int64"),
+            "chunk_ids": Sequence(Sequence(Value("int64"))),
+            "input_ids": Sequence(Value("int64")),
+            "shift_labels": Sequence(Value("int64")),
+        })
         try:
-            local_path = HF_HOME + f'/datasets/{self.name}_{model_name.replace("/", "_")}'
+            local_path = HF_HOME + f'/datasets/{self.name}_{self.model_name.replace("/", "_")}'
             print(f"Loading dataset from local path: {local_path}")
             self.data = load_from_disk(local_path)
             self.data = self.data.remove_columns(["token_length", "encoder_input", "decoder_input", "label"])
-        except:
+        except Exception:
             self.data = load_dataset("HuggingFaceH4/ultrachat_200k", split=split)
-        self.data = self.data.map(self._prepare_data, num_proc=CPU_NUM)
-        self.data = self.data.filter(lambda x: x['token_length'] >= 1024, num_proc=CPU_NUM)
-        self.data = self._adjust_format()
-        
-    def _prepare_data(self, example):
+            self.data = self.data.remove_columns(["prompt", "prompt_id"])
+        self.data = self.data.map(self._batching, num_proc=CPU_NUM)
+        self.data = self.data.map(self._prepare_data, batched=True, batch_size=1,
+                remove_columns=["messages", "message_tokens"], num_proc=CPU_NUM,
+                features=features)
+        self.data = self.data.filter(lambda x: x["token_length"] >= CHUNK_THRESHOLD,
+                num_proc=CPU_NUM)
+        self.data = self.data.filter(lambda x: x["chunk_num"] > 0,
+                num_proc=CPU_NUM)
+
+    def _batching(self, example):
         dialogue_tokens = self.tokenizer.apply_chat_template(example['messages'])
-        
+
         message_tokens = []
         start = 0
         for i, token in enumerate(dialogue_tokens):
-            if token == 128009: # <|eot_id|>
-                message_tokens.append(dialogue_tokens[start:i+1])
+            if token == EOT_TOKEN_ID:
+                message_tokens.append(dialogue_tokens[start:i + 1])
                 start = i + 1
-        message_tokens = message_tokens[1:]  # Exclude the first message (system prompt)
-        
-        # token_count = 0
-        # turn_count = 0
-        # history_item = []
-        # history = []
-        # turns = []
-        # for msg in message_tokens:
-        #     token_count += len(msg)
-        #     history_item.extend(msg)
-        #     turn_count += 1
-        #     if token_count >= 1024 and turn_count % 2 == 0:
-        #         turns.append(turn_count // 2)
-        #         history.append(history_item)
-        #         history_item = []
-        #         token_count = 0
-        
+        # Exclude the first message (system prompt)
+        return {"message_tokens": message_tokens[1:]}
+
+    @staticmethod
+    def _build_shift_labels(messages):
+        """Build shift labels: mask user turns with -100, keep assistant turns."""
+        shift_labels = []
+        for idx, msg in enumerate(messages):
+            if idx % 2 == 0:
+                shift_labels.extend([-100] * len(msg))
+            else:
+                shift_labels.extend(msg)
+        return shift_labels
+
+    @staticmethod
+    def _split_history(message_tokens):
+        """Split dialogue into history chunks and corresponding turn boundaries.
+
+        Groups consecutive turn pairs (user + assistant). When accumulated token
+        count reaches CHUNK_THRESHOLD, the current accumulation becomes a history
+        chunk and a new accumulation begins.
+
+        Returns:
+            history: list of token lists, each representing a compressed history chunk.
+            turns: list of turn-pair indices where each chunk boundary falls.
+        """
         token_count = 0
         turn_count = 0
         history_item = []
         current_dialog = []
         history = []
         turns = []
+
         for msg in message_tokens:
             token_count += len(msg)
             current_dialog.extend(msg)
             turn_count += 1
+
             if turn_count % 2 == 0:
-                if token_count < 1024:
+                if token_count < CHUNK_THRESHOLD:
                     history_item.extend(current_dialog)
-                    current_dialog = []
                 else:
-                    turns.append(turn_count // 2 - 1)
-                    history.append(history_item)
+                    if history_item:  # Don't create a chunk from empty history
+                        turns.append(turn_count // 2 - 1)
+                        history.append(history_item)
                     history_item = current_dialog
-                    current_dialog = []
                     token_count = len(history_item)
-        
-        encoder_input = []
-        decoder_input = []
-        label = []
-        for i in range(len(history)):
-            encoder = history[:i+1]
-            decoder = []
-            label_item = []
-            encoder_input.append(encoder)
-            for msg in message_tokens[turns[i]*2:]:
-                decoder.extend(msg)
-            decoder_input.append(decoder)
-            for i, msg in enumerate(message_tokens[turns[i]*2:]):
-                if i % 2 == 0:
-                    label_item.extend([-100] * len(msg))
-                else:
-                    label_item.extend(msg)
-            label.append(label_item)
+                current_dialog = []
+
+        return history, turns
+
+    def _prepare_data(self, batch):
+        all_chunk_ids = []
+        all_input_ids = []
+        all_shift_labels = []
+        all_token_length = []
+        all_chunk_num = []
+
+        for message_tokens in batch['message_tokens']:
+            token_length = sum(len(msg) for msg in message_tokens)
+            history, turns = self._split_history(message_tokens)
+
+            if not history:
+                all_token_length.append(token_length)
+                all_chunk_ids.append([])
+                all_chunk_num.append(0)
+                all_input_ids.append([tok for msg in message_tokens for tok in msg])
+                all_shift_labels.append(self._build_shift_labels(message_tokens))
+                continue
+
+            for i in range(len(history)):
+                all_token_length.append(token_length)
+                all_chunk_ids.append(history[:i + 1])
+                all_chunk_num.append(i + 1)
+                current_messages = message_tokens[turns[i] * 2:]
+                all_input_ids.append([tok for msg in current_messages for tok in msg])
+                all_shift_labels.append(self._build_shift_labels(current_messages))
 
         return {
-            "token_length": len(dialogue_tokens),
-            "encoder_input": encoder_input,
-            "decoder_input": decoder_input,
-            "label": label
+            "token_length": all_token_length,
+            "chunk_num": all_chunk_num,
+            "chunk_ids": all_chunk_ids,
+            "input_ids": all_input_ids,
+            "shift_labels": all_shift_labels,
         }
-    
-    def _adjust_format(self):
-        ds_new = []
-        for sample in self.data:
-            for i in range(len(sample['encoder_input'])):
-                if len (sample['decoder_input'][i]) == 1:
-                    continue
-                if len(sample['encoder_input'][i][0]) == 0:
-                    sample['encoder_input'][i] = sample['encoder_input'][i][1:]
-                sample['label'][i] = sample['label'][i] + [-100]
-                sample['label'][i] = sample['label'][i][1:]
-                ds_new.append({
-                    # "messages": list(sample['messages']),
-                    "token_length": sample['token_length'],
-                    "chunk_num": len(sample['encoder_input'][i]),
-                    "chunk_ids": list(sample['encoder_input'][i]),
-                    "input_ids": list(sample['decoder_input'][i]),
-                    "shift_labels": list(sample['label'][i])
-                })
-        return Dataset.from_list(ds_new)
+
 
 if __name__ == "__main__":
     model_name = "meta-llama/Llama-3.1-8B-Instruct"
