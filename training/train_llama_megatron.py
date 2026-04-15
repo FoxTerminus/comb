@@ -42,7 +42,7 @@ def parse_args():
     parser.add_argument("--model-name", type=str, default="meta-llama/Llama-3.1-8B-Instruct")
     parser.add_argument("--output-dir", type=str, default="/data3/junhaohu/model/CombLlama-11B-Instruct-megatron")
     parser.add_argument("--ckpt-dir", type=str, default="/data3/junhaohu/checkpoints/CombLlama-11B-Instruct-megatron")
-    parser.add_argument("--resume-ckpt", type=str, default=None,
+    parser.add_argument("--resume-ckpt", type=str, default="/data3/junhaohu/checkpoints/CombLlama-11B-Instruct-megatron/step_5219",
                         help="Path to checkpoint directory to resume from")
     parser.add_argument("--log-interval", type=int, default=100,
                         help="Log every N global steps to training_loss.csv")
@@ -255,7 +255,7 @@ def main():
     scaler = None  # BF16 does not need GradScaler
 
     for dataset_name in datasets_to_train:
-        ds = DATASET_DICT[dataset_name](args.model_name, split="train_sft")
+        ds = DATASET_DICT[dataset_name](args.model_name, split="train_sft" if dataset_name == "ultrachat_200k" else "train")
         tokenized_ds = ds.data
 
         # DP-aware sampler: TP ranks in same group get same data
@@ -276,6 +276,7 @@ def main():
         )
 
         micro_step = 0
+        accumulated_loss = 0.0
         total_micro_steps = len(data_loader)
         if dist.get_rank() == 0:
             print(f"[{dataset_name}] Starting training: "
@@ -309,6 +310,7 @@ def main():
             # Backward
             loss.backward()
             micro_step += 1
+            accumulated_loss += loss.item()
 
             # Per-micro-step progress
             if micro_step % args.steps_per_print == 0 and dist.get_rank() == 0:
@@ -329,10 +331,11 @@ def main():
 
                 # Logging
                 if global_steps % args.log_interval == 0 and dist.get_rank() == 0:
-                    actual_loss = loss.item() * grad_accum_steps
-                    print(f"[{dataset_name}] step {global_steps}, loss: {actual_loss:.6f}")
+                    print(f"[{dataset_name}] step {global_steps}, loss: {accumulated_loss:.6f}")
                     with open("training_loss.csv", "a") as f:
-                        f.write(f"{dataset_name},{global_steps},{actual_loss}\n")
+                        f.write(f"{dataset_name},{global_steps},{accumulated_loss}\n")
+
+                accumulated_loss = 0.0
 
         # Handle remaining micro-steps that didn't reach accumulation boundary
         if micro_step % grad_accum_steps != 0:
