@@ -1,5 +1,7 @@
 # Stage 0 Design Freeze
 
+Status: complete as of `2026-04-20`; this document is the frozen boundary reference for the current YOCO baseline implementation.
+
 This document freezes the implementation boundary for the first `YOCO-Llama` baseline in this repository.
 
 ## Baseline Identity

@@ -1,5 +1,22 @@
 # YOCO-Llama Baseline Plan
 
+## Progress Snapshot
+
+Last synced: `2026-04-20`
+
+Current status based on `./baselines/YOCO/PLAN.md`, `./baselines/YOCO/STAGE0_DESIGN.md`, and the code already present under `./baselines/YOCO`:
+
+- Stage 0 is complete: the baseline boundary is frozen in `STAGE0_DESIGN.md`.
+- Stage 1 is complete at the implementation level: the standalone YOCO model skeleton exists and can be instantiated from config.
+- Stage 2 is complete: a GPU smoke run verified the `16 + 16` forward path, output logits shape, and finite loss.
+- Stage 3 is complete: `use_cache=True` prefill + decode matches full forward within tolerance, and the dedicated YOCO cache path is verified.
+- Stage 4 is complete: the initialization CLI, checkpoint reload, post-init forward, and loading-info reporting are all verified.
+- Stage 5 is complete: `collate_fn_yoco` packs ordinary decoder tokens and packed batches run directly through the YOCO model.
+- Stage 6 is complete: the training script now has a synthetic-data acceptance mode, a short run decreases loss, tiny-slice overfitting is observed, and checkpoint resume works.
+- Stage 7 is complete: TP adaptation runs on 2 GPUs, rank losses match, TP cache works, and TP output aligns with the non-TP reference within expected `bf16` tolerance.
+- Stage 8 is complete: `prepare_inputs_for_generation` and `_reorder_cache` are implemented, greedy generation works with `use_cache=True`, and manual stepwise decoding matches `generate()`.
+- Stage 9 is complete for the current correctness-stage baseline: a first verification report now exists in `./baselines/YOCO/VERIFICATION_REPORT.md` with smoke, cache, overfit, memory, latency, and Llama/CombLlama comparison notes.
+
 ## Objective
 
 Build a pure YOCO-Llama baseline on top of `Llama-3.1-8B-Instruct` inside this repository.
@@ -94,16 +111,16 @@ Lock the baseline boundary so implementation does not drift into a Comb/YOCO hyb
 
 #### TODO
 
-- [ ] Fix the model identity as `YOCO-Llama-8B-Init`
-- [ ] Fix the layer split to `16 self + 16 cross`
-- [ ] Fix the training strategy to full-parameter training
-- [ ] Fix the external interface to standard `input_ids`-based causal LM inputs
-- [ ] Explicitly exclude `chunk_ids`, `chunk_model`, and chunk-specific packing from this baseline
+- [x] Fix the model identity as `YOCO-Llama-8B-Init`
+- [x] Fix the layer split to `16 self + 16 cross`
+- [x] Fix the training strategy to full-parameter training
+- [x] Fix the external interface to standard `input_ids`-based causal LM inputs
+- [x] Explicitly exclude `chunk_ids`, `chunk_model`, and chunk-specific packing from this baseline
 
 #### Acceptance
 
-- [ ] A design note exists and clearly states that this baseline is a pure YOCO-Llama model
-- [ ] The model can be described in one sentence without referencing Comb's chunk encoder
+- [x] A design note exists and clearly states that this baseline is a pure YOCO-Llama model
+- [x] The model can be described in one sentence without referencing Comb's chunk encoder
 
 ### Stage 1: Create the YOCO Model Skeleton
 
@@ -114,12 +131,12 @@ modifying `models/CombLlama.py`.
 
 #### TODO
 
-- [ ] Add `baselines/YOCO/models/YOCO.py`
-- [ ] Add `YOCOConfig`
-- [ ] Add `YOCOPreTrainedModel`
-- [ ] Add `YOCOTextModel`
-- [ ] Add `YOCOForCausalLM`
-- [ ] Keep HuggingFace-style outputs using `BaseModelOutputWithPast` and `CausalLMOutputWithPast`
+- [x] Add `baselines/YOCO/models/YOCO.py`
+- [x] Add `YOCOConfig`
+- [x] Add `YOCOPreTrainedModel`
+- [x] Add `YOCOTextModel`
+- [x] Add `YOCOForCausalLM`
+- [x] Keep HuggingFace-style outputs using `BaseModelOutputWithPast` and `CausalLMOutputWithPast`
 
 #### Suggested Class Layout
 
@@ -132,8 +149,8 @@ modifying `models/CombLlama.py`.
 
 #### Acceptance
 
-- [ ] The model can be instantiated from config
-- [ ] The printed module tree clearly separates self-decoder and cross-decoder
+- [x] The model can be instantiated from config
+- [x] The printed module tree clearly separates self-decoder and cross-decoder
 
 ### Stage 2: Implement the 16+16 Forward Structure
 
@@ -151,18 +168,18 @@ Make the architecture run correctly before worrying about speed or distributed t
 
 #### TODO
 
-- [ ] Implement self-decoder forward
-- [ ] Implement cross-decoder layers
-- [ ] Implement `YOCOTextModel.forward(...)`
-- [ ] Implement `YOCOForCausalLM.forward(...)`
-- [ ] Compute logits and LM loss correctly
+- [x] Implement self-decoder forward
+- [x] Implement cross-decoder layers
+- [x] Implement `YOCOTextModel.forward(...)`
+- [x] Implement `YOCOForCausalLM.forward(...)`
+- [x] Compute logits and LM loss correctly
 
 #### Acceptance
 
-- [ ] Random input forward passes without error
-- [ ] Output logits have correct shape
-- [ ] Loss is finite
-- [ ] No chunk-related input is required
+- [x] Random input forward passes without error
+- [x] Output logits have correct shape
+- [x] Loss is finite
+- [x] No chunk-related input is required
 
 ### Stage 3: Implement YOCO Cache Semantics
 
@@ -172,19 +189,19 @@ Implement the main YOCO idea: reuse memory/cache correctly instead of maintainin
 
 #### TODO
 
-- [ ] Define a dedicated YOCO cache structure
-- [ ] Implement prefill behavior
-- [ ] Implement decode behavior
-- [ ] Ensure self-decoder owns the reusable history memory
-- [ ] Ensure cross-decoder reads memory rather than maintaining a redundant full history self-attention cache
-- [ ] Support `use_cache=True`
+- [x] Define a dedicated YOCO cache structure
+- [x] Implement prefill behavior
+- [x] Implement decode behavior
+- [x] Ensure self-decoder owns the reusable history memory
+- [x] Ensure cross-decoder reads memory rather than maintaining a redundant full history self-attention cache
+- [x] Support `use_cache=True`
 
 #### Acceptance
 
-- [ ] `use_cache=False` works
-- [ ] `use_cache=True` works
-- [ ] Prefill followed by token-by-token decode works
-- [ ] Token-by-token decode approximately matches full forward logits within expected tolerance
+- [x] `use_cache=False` works
+- [x] `use_cache=True` works
+- [x] Prefill followed by token-by-token decode works
+- [x] Token-by-token decode approximately matches full forward logits within expected tolerance
 
 ### Stage 4: Llama-to-YOCO Weight Initialization
 
@@ -203,19 +220,19 @@ Initialize the YOCO baseline from `Llama-3.1-8B-Instruct` rather than random ini
 
 #### TODO
 
-- [ ] Add `baselines/YOCO/scripts/init_yoco_from_llama.py`
-- [ ] Load `Llama-3.1-8B-Instruct`
-- [ ] Build the YOCO model
-- [ ] Apply a deterministic weight mapping
-- [ ] Save a new HuggingFace-style checkpoint
-- [ ] Print missing keys, unexpected keys, and total parameter count
+- [x] Add `baselines/YOCO/scripts/init_yoco_from_llama.py`
+- [x] Load `Llama-3.1-8B-Instruct`
+- [x] Build the YOCO model
+- [x] Apply a deterministic weight mapping
+- [x] Save a new HuggingFace-style checkpoint
+- [x] Print missing keys, unexpected keys, and total parameter count
 
 #### Acceptance
 
-- [ ] The initialization script completes successfully
-- [ ] The saved checkpoint can be reloaded
-- [ ] Forward pass works after initialization
-- [ ] Parameter count is recorded
+- [x] The initialization script completes successfully
+- [x] The saved checkpoint can be reloaded
+- [x] Forward pass works after initialization
+- [x] Parameter count is recorded
 
 ### Stage 5: Build the YOCO Data Path
 
@@ -235,15 +252,15 @@ The first training version should consume only the fields required by a standard
 
 #### TODO
 
-- [ ] Add `collate_fn_yoco`
-- [ ] Reuse current datasets only for their `input_ids` and `shift_labels`
-- [ ] Ignore `chunk_ids` during YOCO training
-- [ ] Ensure the collate path remains compatible with packed variable-length training if needed
+- [x] Add `collate_fn_yoco`
+- [x] Reuse current datasets only for their `input_ids` and `shift_labels`
+- [x] Ignore `chunk_ids` during YOCO training
+- [x] Ensure the collate path remains compatible with packed variable-length training if needed
 
 #### Acceptance
 
-- [ ] A DataLoader batch can be passed directly into the YOCO model
-- [ ] No part of YOCO training requires `chunk_ids`
+- [x] A DataLoader batch can be passed directly into the YOCO model
+- [x] No part of YOCO training requires `chunk_ids`
 
 ### Stage 6: Add the Training Script
 
@@ -253,11 +270,11 @@ Train the YOCO baseline within this repository using the current training stack 
 
 #### TODO
 
-- [ ] Add `baselines/YOCO/training/train_yoco_megatron.py`
-- [ ] Build the YOCO model from config or Llama initialization
-- [ ] Use full-parameter training
-- [ ] Reuse optimizer, scheduler, bf16, and gradient accumulation patterns from the current training script where appropriate
-- [ ] Add checkpoint save/load logic
+- [x] Add `baselines/YOCO/training/train_yoco_megatron.py`
+- [x] Build the YOCO model from config or Llama initialization
+- [x] Use full-parameter training
+- [x] Reuse optimizer, scheduler, bf16, and gradient accumulation patterns from the current training script where appropriate
+- [x] Add checkpoint save/load logic
 
 #### Important Constraint
 
@@ -265,9 +282,9 @@ Do not freeze any parameter groups in the YOCO baseline training script.
 
 #### Acceptance
 
-- [ ] Single-device training runs for at least one batch
-- [ ] Multi-step training produces decreasing loss on a small sample
-- [ ] Small-scale overfitting on a tiny dataset slice is possible
+- [x] Single-device training runs for at least one batch
+- [x] Multi-step training produces decreasing loss on a small sample
+- [x] Small-scale overfitting on a tiny dataset slice is possible
 
 ### Stage 7: Add Tensor Parallel Support
 
@@ -277,17 +294,17 @@ Adapt the current TP infrastructure to the new YOCO model only after single-devi
 
 #### TODO
 
-- [ ] Add `baselines/YOCO/models/YOCO_megatron.py`
-- [ ] Shard self-decoder attention/MLP projections
-- [ ] Shard cross-decoder attention/MLP projections
-- [ ] Patch local head counts correctly
-- [ ] Verify cache behavior under TP
+- [x] Add `baselines/YOCO/models/YOCO_megatron.py`
+- [x] Shard self-decoder attention/MLP projections
+- [x] Shard cross-decoder attention/MLP projections
+- [x] Patch local head counts correctly
+- [x] Verify cache behavior under TP
 
 #### Acceptance
 
-- [ ] TP=1 matches the non-TP path
-- [ ] TP>1 runs without shape or synchronization issues
-- [ ] Loss values across ranks are consistent
+- [x] TP=1 matches the non-TP path
+- [x] TP>1 runs without shape or synchronization issues
+- [x] Loss values across ranks are consistent
 
 ### Stage 8: Add Inference and Generation
 
@@ -297,16 +314,16 @@ Make the baseline usable for cache-enabled generation, not just training.
 
 #### TODO
 
-- [ ] Implement `prepare_inputs_for_generation`
-- [ ] Implement cache-aware decode inputs
-- [ ] Implement `reorder_cache` if needed
-- [ ] Support greedy generation with `use_cache=True`
+- [x] Implement `prepare_inputs_for_generation`
+- [x] Implement cache-aware decode inputs
+- [x] Implement `reorder_cache` if needed
+- [x] Support greedy generation with `use_cache=True`
 
 #### Acceptance
 
-- [ ] Prompt-to-text generation works
-- [ ] Cache-enabled generation does not fail on long prompts
-- [ ] Manual stepwise decoding and `generate()` are behaviorally consistent
+- [x] Prompt-to-text generation works
+- [x] Cache-enabled generation does not fail on long prompts
+- [x] Manual stepwise decoding and `generate()` are behaviorally consistent
 
 ### Stage 9: Baseline Verification and Comparison
 
@@ -316,37 +333,37 @@ Verify that the baseline is correct enough to compare against Llama and CombLlam
 
 #### TODO
 
-- [ ] Record total parameter count
-- [ ] Record trainable parameter count
-- [ ] Run smoke tests
-- [ ] Run cache consistency tests
-- [ ] Run short overfit tests
-- [ ] Measure memory usage
-- [ ] Measure prefill latency
-- [ ] Measure decode latency
-- [ ] Compare against original Llama and current CombLlama
+- [x] Record total parameter count
+- [x] Record trainable parameter count
+- [x] Run smoke tests
+- [x] Run cache consistency tests
+- [x] Run short overfit tests
+- [x] Measure memory usage
+- [x] Measure prefill latency
+- [x] Measure decode latency
+- [x] Compare against original Llama and current CombLlama
 
 #### Acceptance
 
-- [ ] A first comparison report exists
-- [ ] The baseline can be described in terms of correctness, training viability, and performance tradeoffs
+- [x] A first comparison report exists
+- [x] The baseline can be described in terms of correctness, training viability, and performance tradeoffs
 
 ## File-Level TODO List
 
 ### New Files
 
-- [ ] `baselines/YOCO/models/YOCO.py`
-- [ ] `baselines/YOCO/models/YOCO_megatron.py`
-- [ ] `baselines/YOCO/scripts/init_yoco_from_llama.py`
-- [ ] `baselines/YOCO/training/train_yoco_megatron.py`
-- [ ] `baselines/YOCO/tests/test_yoco_smoke.py`
-- [ ] `baselines/YOCO/tests/test_yoco_cache.py`
-- [ ] `baselines/YOCO/tests/test_yoco_init_from_llama.py`
+- [x] `baselines/YOCO/models/YOCO.py`
+- [x] `baselines/YOCO/models/YOCO_megatron.py`
+- [x] `baselines/YOCO/scripts/init_yoco_from_llama.py`
+- [x] `baselines/YOCO/training/train_yoco_megatron.py`
+- [x] `baselines/YOCO/tests/test_yoco_smoke.py`
+- [x] `baselines/YOCO/tests/test_yoco_cache.py`
+- [x] `baselines/YOCO/tests/test_yoco_init_from_llama.py`
 
 ### Data / Collate Changes
 
-- [ ] Add `collate_fn_yoco` in `data/base.py` or a dedicated YOCO collate file
-- [ ] Keep the YOCO path independent from chunk-specific batch fields
+- [x] Add `collate_fn_yoco` in `data/base.py` or a dedicated YOCO collate file
+- [x] Keep the YOCO path independent from chunk-specific batch fields
 
 ## Recommended Execution Order
 
@@ -367,36 +384,36 @@ Verify that the baseline is correct enough to compare against Llama and CombLlam
 
 ### M1: Structure Complete
 
-- [ ] The model instantiates
-- [ ] Forward runs
-- [ ] Logits and loss are valid
+- [x] The model instantiates
+- [x] Forward runs
+- [x] Logits and loss are valid
 
 ### M2: Cache Complete
 
-- [ ] Prefill and decode both work
-- [ ] Cache semantics are stable
-- [ ] Stepwise decode and full forward align within tolerance
+- [x] Prefill and decode both work
+- [x] Cache semantics are stable
+- [x] Stepwise decode and full forward align within tolerance
 
 ### M3: Initialization Complete
 
-- [ ] Llama-to-YOCO initialization works
-- [ ] Reloaded checkpoints run correctly
+- [x] Llama-to-YOCO initialization works
+- [x] Reloaded checkpoints run correctly
 
 ### M4: Training Complete
 
-- [ ] Loss decreases on a small training run
-- [ ] Tiny-slice overfitting is possible
+- [x] Loss decreases on a small training run
+- [x] Tiny-slice overfitting is possible
 
 ### M5: Parallel Complete
 
-- [ ] TP training works
-- [ ] Rank consistency checks pass
+- [x] TP training works
+- [x] Rank consistency checks pass
 
 ### M6: Baseline Complete
 
-- [ ] Generation works
-- [ ] Benchmark numbers exist
-- [ ] Comparison against Llama and CombLlama exists
+- [x] Generation works
+- [x] Benchmark numbers exist
+- [x] Comparison against Llama and CombLlama exists
 
 ## Current Default Implementation Choices
 

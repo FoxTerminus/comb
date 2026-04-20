@@ -1,10 +1,12 @@
 """YOCO-Llama baseline.
 
-Stage 2 implements the first runnable 16+16 forward path:
+This module contains the repository's first pure YOCO-style baseline built on
+top of a Llama-compatible configuration:
 
-- the self-decoder uses sliding-window attention (SWA)
-- the cross-decoder attends to the final self-decoder memory states
-- cache-aware decoding is deferred to Stage 3
+- the first half of decoder layers form the self-decoder
+- the second half form the cross-decoder
+- the self-decoder owns reusable history memory
+- the cross-decoder consumes that memory for cache-enabled decoding
 """
 
 from typing import Optional, Tuple, Union
@@ -31,6 +33,8 @@ from flash_attn import flash_attn_varlen_func
 def _compute_loss(logits, labels, shift_labels, vocab_size):
     if labels is None and shift_labels is None:
         return None
+    if shift_labels is None:
+        shift_labels = labels
     loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
     return loss_fct(logits.view(-1, vocab_size), shift_labels.view(-1))
 
@@ -96,7 +100,17 @@ class YOCOConfig(PretrainedConfig):
 
 
 class YOCODynamicCache:
-    """Minimal cache container for Stage 3 YOCO decoding."""
+    """YOCO cache for single-sequence generation.
+
+    The cache stores two pieces of state:
+
+    - per-layer sliding-window KV tensors for the self-decoder
+    - accumulated self-decoder hidden states used as cross-decoder memory
+
+    The current implementation is intentionally minimal and only supports the
+    generation path validated in this baseline: a single packed sequence per
+    decode step.
+    """
 
     def __init__(self, num_self_decoder_layers: int, window_size: int):
         self.num_self_decoder_layers = num_self_decoder_layers
@@ -484,7 +498,7 @@ class YOCOCrossDecoder(YOCOPreTrainedModel):
 
 
 class YOCOTextModel(YOCOPreTrainedModel):
-    """YOCO text model skeleton with separate self-decoder and cross-decoder."""
+    """YOCO text model with separate self-decoder and cross-decoder stacks."""
 
     config_class = YOCOConfig
     base_model_prefix = "model"
@@ -542,6 +556,7 @@ class YOCOTextModel(YOCOPreTrainedModel):
         if cu_seqlens_q is None or max_seqlen_q is None:
             raise ValueError("cu_seqlens_q and max_seqlen_q must be provided.")
 
+        previous_memory_len = 0
         if use_cache:
             if cu_seqlens_q.numel() != 2:
                 raise NotImplementedError("Stage 3 cache path currently supports one sequence per batch.")
@@ -552,6 +567,7 @@ class YOCOTextModel(YOCOPreTrainedModel):
                 )
             elif not isinstance(past_key_values, YOCODynamicCache):
                 raise TypeError("past_key_values must be a YOCODynamicCache for YOCO cache mode.")
+            previous_memory_len = past_key_values.get_seq_length()
 
         hidden_states = inputs_embeds
         query_position_embeddings = self.rotary_emb(hidden_states, position_ids)
@@ -566,7 +582,16 @@ class YOCOTextModel(YOCOPreTrainedModel):
             output_hidden_states=output_hidden_states,
         )
 
-        if use_cache:
+        if use_cache and previous_memory_len == 0 and max_seqlen_q > 1:
+            # During the initial prefill call we want the same token-to-token
+            # semantics as the no-cache path: each query position can only read
+            # self-decoder memory up to its own position.
+            memory_states = self_hidden_states
+            memory_position_embeddings = query_position_embeddings
+            cu_seqlens_k = cu_seqlens_q
+            max_seqlen_k = max_seqlen_q
+            causal = True
+        elif use_cache:
             past_key_values.append_memory(self_hidden_states, position_ids)
             memory_states, memory_position_ids = past_key_values.get_memory()
             memory_states = memory_states.unsqueeze(0)
@@ -598,6 +623,9 @@ class YOCOTextModel(YOCOPreTrainedModel):
         )
 
         hidden_states = self.norm(cross_hidden_states)
+
+        if use_cache and previous_memory_len == 0 and max_seqlen_q > 1:
+            past_key_values.append_memory(self_hidden_states, position_ids)
 
         all_hidden_states = None
         if output_hidden_states:
@@ -643,6 +671,94 @@ class YOCOForCausalLM(YOCOPreTrainedModel, GenerationMixin):
 
     def get_decoder(self):
         return self.model
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids: torch.LongTensor,
+        past_key_values: Optional[Cache] = None,
+        attention_mask: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        **kwargs,
+    ):
+        """Build packed YOCO inputs for HuggingFace generation.
+
+        The baseline currently supports batch size 1 during generation. Prefill
+        is passed as a single packed sequence, then each decode step is reduced
+        to the newest token plus the custom YOCO cache object.
+        """
+        if input_ids is None and inputs_embeds is None:
+            raise ValueError("YOCO generation requires input_ids or inputs_embeds.")
+
+        batch_size = input_ids.shape[0] if input_ids is not None else inputs_embeds.shape[0]
+        if batch_size != 1:
+            raise NotImplementedError("YOCO generation currently supports batch_size=1.")
+
+        position_ids = kwargs.get("position_ids")
+        use_cache = kwargs.get("use_cache", True)
+
+        if past_key_values is not None:
+            if not isinstance(past_key_values, YOCODynamicCache):
+                if isinstance(past_key_values, Cache) and past_key_values.get_seq_length() == 0:
+                    past_key_values = None
+                else:
+                    raise TypeError("YOCO generation requires YOCODynamicCache when past_key_values is provided.")
+
+        if past_key_values is not None:
+            past_length = past_key_values.get_seq_length()
+            if input_ids is not None:
+                input_ids = input_ids[:, -1:]
+                device = input_ids.device
+            else:
+                inputs_embeds = inputs_embeds[:, -1:, :]
+                device = inputs_embeds.device
+
+            position_ids = torch.tensor([[past_length]], dtype=torch.long, device=device)
+            cu_seqlens_q = torch.tensor([0, 1], dtype=torch.int32, device=device)
+            max_seqlen_q = 1
+        else:
+            if input_ids is not None:
+                seq_len = input_ids.shape[1]
+                device = input_ids.device
+            else:
+                seq_len = inputs_embeds.shape[1]
+                device = inputs_embeds.device
+
+            if position_ids is None:
+                if attention_mask is not None:
+                    position_ids = attention_mask.long().cumsum(-1) - 1
+                    position_ids = position_ids.clamp_min(0)
+                else:
+                    position_ids = torch.arange(seq_len, dtype=torch.long, device=device).unsqueeze(0)
+
+            cu_seqlens_q = torch.tensor([0, seq_len], dtype=torch.int32, device=device)
+            max_seqlen_q = seq_len
+
+        model_inputs = {
+            "position_ids": position_ids,
+            "past_key_values": past_key_values,
+            "use_cache": use_cache,
+            "cu_seqlens_q": cu_seqlens_q,
+            "max_seqlen_q": max_seqlen_q,
+        }
+
+        if cache_position is not None:
+            model_inputs["cache_position"] = cache_position
+
+        if inputs_embeds is not None and past_key_values is None:
+            model_inputs["inputs_embeds"] = inputs_embeds
+        else:
+            model_inputs["input_ids"] = input_ids
+
+        return model_inputs
+
+    @staticmethod
+    def _reorder_cache(past_key_values, beam_idx):
+        if past_key_values is None or not isinstance(past_key_values, YOCODynamicCache):
+            return past_key_values
+        if beam_idx.numel() != 1 or beam_idx.item() != 0:
+            raise NotImplementedError("YOCO cache reordering is only implemented for batch_size=1.")
+        return past_key_values
 
     def forward(
         self,

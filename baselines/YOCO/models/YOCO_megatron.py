@@ -17,16 +17,30 @@ from baselines.YOCO.models.YOCO import _apply_rotary_to_single
 def _replace_attention_linear(attn_module, tp_group, column_names, row_names):
     for name in column_names:
         old = getattr(attn_module, name)
-        setattr(attn_module, name, ColumnParallelLinear.from_linear(old, tp_group))
+        new = ColumnParallelLinear.from_linear(old, tp_group).to(device=old.weight.device, dtype=old.weight.dtype)
+        setattr(attn_module, name, new)
     for name in row_names:
         old = getattr(attn_module, name)
-        setattr(attn_module, name, RowParallelLinear.from_linear(old, tp_group))
+        new = RowParallelLinear.from_linear(old, tp_group).to(device=old.weight.device, dtype=old.weight.dtype)
+        setattr(attn_module, name, new)
 
 
 def _replace_mlp_linear(mlp_module, tp_group):
-    mlp_module.gate_proj = ColumnParallelLinear.from_linear(mlp_module.gate_proj, tp_group)
-    mlp_module.up_proj = ColumnParallelLinear.from_linear(mlp_module.up_proj, tp_group)
-    mlp_module.down_proj = RowParallelLinear.from_linear(mlp_module.down_proj, tp_group)
+    gate_old = mlp_module.gate_proj
+    up_old = mlp_module.up_proj
+    down_old = mlp_module.down_proj
+    mlp_module.gate_proj = ColumnParallelLinear.from_linear(gate_old, tp_group).to(
+        device=gate_old.weight.device,
+        dtype=gate_old.weight.dtype,
+    )
+    mlp_module.up_proj = ColumnParallelLinear.from_linear(up_old, tp_group).to(
+        device=up_old.weight.device,
+        dtype=up_old.weight.dtype,
+    )
+    mlp_module.down_proj = RowParallelLinear.from_linear(down_old, tp_group).to(
+        device=down_old.weight.device,
+        dtype=down_old.weight.dtype,
+    )
 
 
 def _patch_num_heads(module, tp_size, head_attrs):
@@ -159,5 +173,7 @@ def apply_tensor_parallelism(model, tp_group: dist.ProcessGroup):
 
     # 4. LM head
     lm_head = model.lm_head
-    model.lm_head = ColumnParallelLinear.from_linear(lm_head, tp_group, gather_output=True)
-
+    model.lm_head = ColumnParallelLinear.from_linear(lm_head, tp_group, gather_output=True).to(
+        device=lm_head.weight.device,
+        dtype=lm_head.weight.dtype,
+    )

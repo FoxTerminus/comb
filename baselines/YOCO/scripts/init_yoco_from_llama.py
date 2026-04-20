@@ -12,7 +12,7 @@ YOCO-Llama baseline:
 import argparse
 import json
 import os
-from typing import Dict, List, Tuple
+from typing import Dict, Tuple
 
 import torch
 from transformers import AutoModelForCausalLM, LlamaConfig
@@ -80,7 +80,7 @@ def build_yoco_from_llama(
     llama_path: str,
     torch_dtype: torch.dtype = torch.float32,
 ) -> Tuple[YOCOForCausalLM, Dict]:
-    llama = AutoModelForCausalLM.from_pretrained(llama_path, torch_dtype=torch_dtype)
+    llama = AutoModelForCausalLM.from_pretrained(llama_path, dtype=torch_dtype)
     llama_config = llama.config
     if not isinstance(llama_config, LlamaConfig):
         llama_config = LlamaConfig(**llama_config.to_dict())
@@ -118,6 +118,18 @@ def save_summary(summary: Dict, output_dir: str):
         json.dump(summary, f, indent=2, ensure_ascii=False)
 
 
+def validate_saved_checkpoint(output_dir: str, torch_dtype: torch.dtype) -> Dict:
+    _, loading_info = YOCOForCausalLM.from_pretrained(
+        output_dir,
+        dtype=torch_dtype,
+        output_loading_info=True,
+    )
+    return {
+        "missing_keys": sorted(loading_info["missing_keys"]),
+        "unexpected_keys": sorted(loading_info["unexpected_keys"]),
+    }
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Initialize YOCO-Llama from Llama")
     parser.add_argument(
@@ -149,8 +161,11 @@ def main():
         "bfloat16": torch.bfloat16,
         "float16": torch.float16,
     }
-    yoco, summary = build_yoco_from_llama(args.llama_path, torch_dtype=dtype_map[args.dtype])
+    torch_dtype = dtype_map[args.dtype]
+    yoco, summary = build_yoco_from_llama(args.llama_path, torch_dtype=torch_dtype)
     yoco.save_pretrained(args.output_dir)
+    loading_info = validate_saved_checkpoint(args.output_dir, torch_dtype=torch_dtype)
+    summary.update(loading_info)
     save_summary(summary, args.output_dir)
 
     print("YOCO checkpoint initialized successfully.")
@@ -160,4 +175,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

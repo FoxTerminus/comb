@@ -11,19 +11,54 @@ Stage 6 focuses on the YOCO-specific training path:
 import argparse
 import datetime
 import os
+import sys
+from pathlib import Path
 
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 
 from transformers import LlamaConfig
 
 from baselines.YOCO.models.YOCO import YOCOConfig, YOCOForCausalLM
 from baselines.YOCO.models.YOCO_megatron import apply_tensor_parallelism
 from baselines.YOCO.training.data import collate_fn_yoco
-from data import TRAIN_DATASETS, DATASET_DICT
-from data.base import CPU_NUM
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+
+class SyntheticYOCODataset(Dataset):
+    """Small deterministic dataset for YOCO smoke, overfit, and TP validation."""
+
+    def __init__(self, num_samples: int, seq_len: int, vocab_size: int):
+        self.num_samples = num_samples
+        self.seq_len = seq_len
+        self.vocab_size = vocab_size
+
+        base = torch.arange(1, seq_len + 1, dtype=torch.long)
+        input_ids = ((base - 1) % max(vocab_size - 1, 1)) + 1
+        shift_labels = torch.roll(input_ids, shifts=-1)
+        shift_labels[-1] = -100
+        self.sample = {
+            "input_ids": input_ids.tolist(),
+            "shift_labels": shift_labels.tolist(),
+        }
+
+    def __len__(self):
+        return self.num_samples
+
+    def __getitem__(self, idx):
+        return self.sample
+
+
+def load_repo_datasets():
+    from data import TRAIN_DATASETS, DATASET_DICT
+    from data.base import CPU_NUM
+
+    return TRAIN_DATASETS, DATASET_DICT, CPU_NUM
 
 
 def parse_args():
@@ -37,7 +72,10 @@ def parse_args():
     parser.add_argument("--warmup-steps", type=int, default=100)
     parser.add_argument("--total-steps", type=int, default=8000000)
     parser.add_argument("--grad-clip", type=float, default=1.0)
-    parser.add_argument("--bf16", action="store_true", default=True)
+    parser.add_argument("--bf16", action="store_true",
+                        help="Run the model in bf16")
+    parser.add_argument("--no-bf16", action="store_false", dest="bf16",
+                        help="Disable bf16 and keep the model in fp32")
     parser.add_argument("--model-name", type=str, default="meta-llama/Llama-3.1-8B-Instruct")
     parser.add_argument("--init-yoco-path", type=str, default=None,
                         help="Optional path to a pre-initialized YOCO checkpoint")
@@ -49,6 +87,13 @@ def parse_args():
                         help="Log every N global steps to training_loss.csv")
     parser.add_argument("--steps-per-print", type=int, default=10,
                         help="Print progress every N micro steps")
+    parser.add_argument("--synthetic-data", action="store_true",
+                        help="Use a deterministic synthetic dataset for smoke and overfit tests")
+    parser.add_argument("--synthetic-num-samples", type=int, default=64)
+    parser.add_argument("--synthetic-seq-len", type=int, default=16)
+    parser.add_argument("--max-steps-per-dataset", type=int, default=0,
+                        help="If > 0, stop after this many global steps on each dataset")
+    parser.set_defaults(bf16=True)
     return parser.parse_args()
 
 
@@ -186,22 +231,41 @@ def main():
     scheduler = WarmupDecayLR(optimizer, args.warmup_steps, args.total_steps)
 
     grad_accum_steps = args.global_batch_size // (args.micro_batch_size * dp_world_size)
+    if grad_accum_steps < 1:
+        raise ValueError(
+            "global_batch_size must be at least micro_batch_size * dp_world_size, "
+            f"got global_batch_size={args.global_batch_size}, "
+            f"micro_batch_size={args.micro_batch_size}, dp_world_size={dp_world_size}"
+        )
     if dist.get_rank() == 0:
         print(f"Gradient accumulation steps: {grad_accum_steps}")
 
     global_steps, resume_dataset = load_checkpoint(model, optimizer, scheduler, args, tp_group)
 
-    datasets_to_train = TRAIN_DATASETS[:]
-    if resume_dataset and resume_dataset in datasets_to_train:
-        idx = datasets_to_train.index(resume_dataset) + 1
-        datasets_to_train = datasets_to_train[idx:]
+    if args.synthetic_data:
+        datasets_to_train = ["synthetic"]
+        cpu_num = os.cpu_count() or 1
+    else:
+        TRAIN_DATASETS, DATASET_DICT, cpu_num = load_repo_datasets()
+        datasets_to_train = TRAIN_DATASETS[:]
+        if resume_dataset and resume_dataset in datasets_to_train:
+            idx = datasets_to_train.index(resume_dataset) + 1
+            datasets_to_train = datasets_to_train[idx:]
 
     for dataset_name in datasets_to_train:
-        ds = DATASET_DICT[dataset_name](
-            args.model_name,
-            split="train_sft" if dataset_name == "ultrachat_200k" else "train",
-        )
-        tokenized_ds = ds.data
+        if args.synthetic_data:
+            vocab_size = model.module.vocab_size if hasattr(model, "module") else model.vocab_size
+            tokenized_ds = SyntheticYOCODataset(
+                num_samples=args.synthetic_num_samples,
+                seq_len=args.synthetic_seq_len,
+                vocab_size=vocab_size,
+            )
+        else:
+            ds = DATASET_DICT[dataset_name](
+                args.model_name,
+                split="train_sft" if dataset_name == "ultrachat_200k" else "train",
+            )
+            tokenized_ds = ds.data
 
         sampler = torch.utils.data.DistributedSampler(
             tokenized_ds,
@@ -215,7 +279,7 @@ def main():
             collate_fn=collate_fn_yoco,
             batch_size=args.micro_batch_size,
             sampler=sampler,
-            num_workers=max(CPU_NUM // dist.get_world_size(), 1),
+            num_workers=max(cpu_num // dist.get_world_size(), 1),
             drop_last=False,
         )
 
@@ -262,6 +326,9 @@ def main():
                         f.write(f"{dataset_name},{global_steps},{accumulated_loss}\n")
 
                 accumulated_loss = 0.0
+
+                if args.max_steps_per_dataset > 0 and global_steps >= args.max_steps_per_dataset:
+                    break
 
         if micro_step % grad_accum_steps != 0:
             if args.grad_clip > 0:
