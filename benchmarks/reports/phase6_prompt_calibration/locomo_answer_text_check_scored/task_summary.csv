@@ -1,5 +1,0 @@
-compression_ratio,benchmark,task,metric_name,num_examples,score,exact_match,contains_match,token_f1,rouge_l_f1,edit_similarity,avg_peak_memory_gb,avg_prefill_latency_s,avg_decode_latency_s,num_errors
-0.125,LoCoMo,multi_hop,choice_match,1,0.0,0.0,0.0,0.0,0.0,0.04918032786885246,22.62504529953003,0.13165235798805952,3.24345892801648,0
-0.25,LoCoMo,multi_hop,choice_match,1,0.0,0.0,1.0,0.0,0.0,0.0,22.87976884841919,0.1692953490128275,3.2953601909975987,0
-0.5,LoCoMo,multi_hop,choice_match,1,0.0,0.0,1.0,0.0,0.0,0.0,23.544633388519287,0.26893510500667617,3.4642373399983626,0
-1.0,LoCoMo,multi_hop,choice_match,1,0.0,0.0,0.0,0.4,0.4,0.391304347826087,24.8804030418396,0.7663279449916445,1.5959299660171382,0

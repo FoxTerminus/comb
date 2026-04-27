@@ -371,12 +371,14 @@ Control: avoid using training data that overlaps with benchmark test sets where 
 
 ## 10. Final Deliverables
 
-1. `benchmarks/configs/*.yaml`: reproducible run configs.
+1. `benchmarks/configs/*.json`: reproducible run configs.
 2. `benchmarks/scripts/*.py`: benchmark runners and aggregators.
-3. `benchmarks/results/*`: raw predictions, raw metrics, logs.
-4. `benchmarks/reports/*.csv`: aggregate tables.
-5. `benchmarks/reports/*.png`: Pareto and context-length plots.
-6. `benchmarks/reports/final_report.md`: final YOCO vs CombLlama comparison.
+3. `benchmarks/results/current/`: current raw predictions and manifest.
+4. `benchmarks/reports/current_benchmark_summary.csv`: benchmark-level aggregate table.
+5. `benchmarks/reports/current_task_summary.csv`: task-level aggregate table.
+6. `benchmarks/reports/current_failure_summary.csv`: collapse and packing diagnostic summary.
+7. `benchmarks/reports/final_report.md`: consolidated current report.
+8. Older phase outputs are removed after consolidation so the tree keeps only the latest result set.
 
 ## 11. Current Implementation Progress
 
@@ -399,9 +401,9 @@ Current default:
 
 Latest status:
 
-1. Phase 12 completed the CombLlama-only interim report at `benchmarks/reports/phase12_combllama_interim_report.md`.
-2. Phase 13 completed the corrected all-encoder-chunks CombLlama dev evaluation at `benchmarks/reports/phase13_all_encoder_chunks_status.md`.
-3. Phase 14 removed the old chunk-dropping policies from active code paths at `benchmarks/reports/phase14_policy_cleanup_status.md`.
-4. Phase 15 ran 50 examples per benchmark under `all_encoder_chunks`; results are in `benchmarks/reports/phase15_all_encoder_chunks_50_each_status.md`.
+1. The consolidated current report is `benchmarks/reports/final_report.md`.
+2. The current raw predictions and manifest are under `benchmarks/results/current/`.
+3. Phase 15 ran 50 examples per benchmark under `all_encoder_chunks`: 250 successful generations, 0 errors, 0 dropped chunks, and 0 detected collapse.
+4. Historical phase outputs were removed after consolidation to reduce redundancy.
 5. The current recommendation is `all_encoder_chunks` for fair CombLlama-vs-YOCO comparison.
 6. The next implementation step should integrate official evaluators or rebalance each benchmark's 50-example subset across task families before final comparison.

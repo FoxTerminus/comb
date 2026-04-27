@@ -1,6 +1,0 @@
-benchmark,task,num_examples,exact_match,avg_peak_memory_gb,avg_prefill_latency_s,avg_decode_latency_s,avg_tokens_per_second,num_errors
-LoCoMo,temporal_memory,1,1.0,,0.0,0.0,,0
-LongBench,multi_document_qa,1,1.0,,0.0,0.0,,0
-LongCodeBench,code_qa,1,1.0,,0.0,0.0,,0
-RULER,retrieval,1,1.0,,0.0,0.0,,0
-SCBench,semantic_retrieval,1,1.0,,0.0,0.0,,0

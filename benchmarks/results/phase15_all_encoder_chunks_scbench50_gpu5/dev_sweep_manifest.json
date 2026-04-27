@@ -1,8 +1,0 @@
-[
-  {
-    "retention_policy": "all_encoder_chunks",
-    "compression_ratio": 1.0,
-    "path": "benchmarks/results/phase15_all_encoder_chunks_scbench50_gpu5/dev_predictions_all_encoder_chunks_cr1p0.jsonl",
-    "num_examples": 50
-  }
-]

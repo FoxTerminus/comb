@@ -1,8 +1,0 @@
-[
-  {
-    "retention_policy": "all_encoder_chunks",
-    "compression_ratio": 1.0,
-    "path": "benchmarks/results/phase13_all_encoder_chunks_dev/dev_predictions_all_encoder_chunks_cr1p0.jsonl",
-    "num_examples": 25
-  }
-]
