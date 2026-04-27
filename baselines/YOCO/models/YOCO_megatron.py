@@ -47,7 +47,10 @@ def _patch_num_heads(module, tp_size, head_attrs):
     module._tp_size = tp_size
     for attr in head_attrs:
         if hasattr(module, attr):
-            setattr(module, attr, getattr(module, attr) // tp_size)
+            value = getattr(module, attr)
+            if value % tp_size != 0:
+                raise ValueError(f"{module.__class__.__name__}.{attr}={value} is not divisible by tp_size={tp_size}")
+            setattr(module, attr, value // tp_size)
 
 
 def apply_tensor_parallelism(model, tp_group: dist.ProcessGroup):
@@ -70,16 +73,26 @@ def apply_tensor_parallelism(model, tp_group: dist.ProcessGroup):
         _patch_num_heads(attn, tp_size, ["num_heads", "num_key_value_heads"])
         _replace_mlp_linear(layer.mlp, tp_group)
 
-    # 2. Cross-decoder layers
+    # 2. Cross-decoder shared memory K/V projections, following official YOCO.
+    _replace_attention_linear(
+        text_model.cross_decoder,
+        tp_group,
+        column_names=["k_proj", "v_proj"],
+        row_names=[],
+    )
+    _patch_num_heads(text_model.cross_decoder, tp_size, ["num_key_value_heads"])
+
+    # 3. Cross-decoder layers. Official YOCO cross-attention layers only own Q
+    # and output projections; K/V are produced once by CrossDecoder and reused.
     for layer in text_model.cross_decoder.layers:
         attn = layer.cross_attn
         _replace_attention_linear(
             attn,
             tp_group,
-            column_names=["q_proj", "k_proj", "v_proj"],
+            column_names=["q_proj"],
             row_names=["o_proj"],
         )
-        _patch_num_heads(attn, tp_size, ["num_heads", "num_key_value_heads"])
+        _patch_num_heads(attn, tp_size, ["num_heads"])
         _replace_mlp_linear(layer.mlp, tp_group)
 
     # 3. Patch self-attention forward to use local head counts
@@ -125,7 +138,8 @@ def apply_tensor_parallelism(model, tp_group: dist.ProcessGroup):
                 max_seqlen_k=key_states.shape[0],
                 dropout_p=0.0,
                 softmax_scale=self.scaling,
-                causal=False,
+                causal=True,
+                window_size=(self.window_size - 1, 0),
             )
 
         attn_output = attn_output.view(1, hidden_states.shape[1], -1)
@@ -137,22 +151,18 @@ def apply_tensor_parallelism(model, tp_group: dist.ProcessGroup):
             )
         return self.o_proj(attn_output), next_past
 
-    def cross_attn_forward_tp(self, hidden_states, memory_states, query_position_embeddings,
-                              memory_position_embeddings, cu_seqlens_q, max_seqlen_q,
+    def cross_attn_forward_tp(self, hidden_states, key_states, value_states, query_position_embeddings,
+                              cu_seqlens_q, max_seqlen_q,
                               cu_seqlens_k, max_seqlen_k, causal):
         from flash_attn import flash_attn_varlen_func
 
         q = self.q_proj(hidden_states).view(-1, self.num_heads, self.head_dim)
-        k = self.k_proj(memory_states).view(-1, self.num_key_value_heads, self.head_dim)
-        v = self.v_proj(memory_states).view(-1, self.num_key_value_heads, self.head_dim)
-
         q = _apply_rotary_to_single(q, query_position_embeddings)
-        k = _apply_rotary_to_single(k, memory_position_embeddings)
 
         attn_output = flash_attn_varlen_func(
             q,
-            k,
-            v,
+            key_states,
+            value_states,
             cu_seqlens_q=cu_seqlens_q,
             cu_seqlens_k=cu_seqlens_k,
             max_seqlen_q=max_seqlen_q,

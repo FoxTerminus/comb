@@ -9,10 +9,12 @@ top of a Llama-compatible configuration:
 - the cross-decoder consumes that memory for cache-enabled decoding
 """
 
+import inspect
 from typing import Optional, Tuple, Union
 
 import torch
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 from transformers import LlamaConfig
 from transformers.cache_utils import Cache
 from transformers.configuration_utils import PretrainedConfig
@@ -30,13 +32,36 @@ from transformers.utils import TransformersKwargs, auto_docstring
 from flash_attn import flash_attn_varlen_func
 
 
+_LLAMA_CONFIG_INIT_KEYS = {
+    name
+    for name in inspect.signature(LlamaConfig.__init__).parameters
+    if name not in {"self", "kwargs"}
+}
+
+
 def _compute_loss(logits, labels, shift_labels, vocab_size):
     if labels is None and shift_labels is None:
         return None
-    if shift_labels is None:
-        shift_labels = labels
+
     loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
-    return loss_fct(logits.view(-1, vocab_size), shift_labels.view(-1))
+    if shift_labels is not None:
+        if logits.shape[:-1] != shift_labels.shape:
+            raise ValueError(
+                "shift_labels must match logits sequence shape: "
+                f"{tuple(shift_labels.shape)} != {tuple(logits.shape[:-1])}"
+            )
+        return loss_fct(logits.reshape(-1, vocab_size), shift_labels.reshape(-1))
+
+    if logits.shape[1] != labels.shape[1]:
+        raise ValueError(
+            "labels use standard causal-LM semantics and require full-sequence logits. "
+            "Use shift_labels when passing pre-shifted or sliced labels."
+        )
+    shift_logits = logits[:, :-1, :].contiguous()
+    shift_labels = labels[:, 1:].contiguous()
+    if shift_logits.numel() == 0:
+        return logits.new_zeros(())
+    return loss_fct(shift_logits.reshape(-1, vocab_size), shift_labels.reshape(-1))
 
 
 def _slice_logits(lm_head, hidden_states, logits_to_keep):
@@ -69,12 +94,26 @@ class YOCOConfig(PretrainedConfig):
         text_config: Optional[LlamaConfig] = None,
         num_self_decoder_layers: int = 16,
         num_cross_decoder_layers: int = 16,
+        sliding_window: int = 1024,
         pad_token_id: Optional[int] = 128004,
         tie_word_embeddings: bool = False,
         **kwargs,
     ):
+        llama_kwargs = {}
         if text_config is None:
-            self.text_config = LlamaConfig()
+            for key in list(kwargs):
+                if key in _LLAMA_CONFIG_INIT_KEYS:
+                    llama_kwargs[key] = kwargs.pop(key)
+            vocab_size = llama_kwargs.get("vocab_size", LlamaConfig().vocab_size)
+            if (
+                "pad_token_id" not in llama_kwargs
+                and pad_token_id is not None
+                and 0 <= pad_token_id < vocab_size
+            ):
+                llama_kwargs["pad_token_id"] = pad_token_id
+
+        if text_config is None:
+            self.text_config = LlamaConfig(**llama_kwargs)
         elif isinstance(text_config, dict):
             self.text_config = LlamaConfig(**text_config)
         elif isinstance(text_config, LlamaConfig):
@@ -82,9 +121,20 @@ class YOCOConfig(PretrainedConfig):
         else:
             raise TypeError("text_config must be None, dict, or LlamaConfig")
 
+        if (
+            text_config is None
+            and "num_hidden_layers" in llama_kwargs
+            and num_self_decoder_layers == 16
+            and num_cross_decoder_layers == 16
+            and llama_kwargs["num_hidden_layers"] != 32
+        ):
+            num_self_decoder_layers = llama_kwargs["num_hidden_layers"] // 2
+            num_cross_decoder_layers = llama_kwargs["num_hidden_layers"] - num_self_decoder_layers
+
         self.num_self_decoder_layers = num_self_decoder_layers
         self.num_cross_decoder_layers = num_cross_decoder_layers
         self.num_hidden_layers = num_self_decoder_layers + num_cross_decoder_layers
+        self.sliding_window = sliding_window
 
         if self.num_hidden_layers != self.text_config.num_hidden_layers:
             raise ValueError(
@@ -105,7 +155,7 @@ class YOCODynamicCache:
     The cache stores two pieces of state:
 
     - per-layer sliding-window KV tensors for the self-decoder
-    - accumulated self-decoder hidden states used as cross-decoder memory
+    - accumulated cross-decoder K/V tensors projected once from self-decoder output
 
     The current implementation is intentionally minimal and only supports the
     generation path validated in this baseline: a single packed sequence per
@@ -117,8 +167,8 @@ class YOCODynamicCache:
         self.window_size = window_size
         self.self_keys = [None] * num_self_decoder_layers
         self.self_values = [None] * num_self_decoder_layers
-        self.memory_states = None
-        self.memory_position_ids = None
+        self.memory_keys = None
+        self.memory_values = None
 
     def get_self_layer_cache(self, layer_idx: int):
         return self.self_keys[layer_idx], self.self_values[layer_idx]
@@ -127,23 +177,21 @@ class YOCODynamicCache:
         self.self_keys[layer_idx] = key_states
         self.self_values[layer_idx] = value_states
 
-    def append_memory(self, memory_states: torch.Tensor, position_ids: torch.Tensor):
-        memory_states = memory_states.squeeze(0)
-        position_ids = position_ids.squeeze(0)
-        if self.memory_states is None:
-            self.memory_states = memory_states
-            self.memory_position_ids = position_ids
+    def append_memory_key_value(self, key_states: torch.Tensor, value_states: torch.Tensor):
+        if self.memory_keys is None:
+            self.memory_keys = key_states
+            self.memory_values = value_states
         else:
-            self.memory_states = torch.cat([self.memory_states, memory_states], dim=0)
-            self.memory_position_ids = torch.cat([self.memory_position_ids, position_ids], dim=0)
+            self.memory_keys = torch.cat([self.memory_keys, key_states], dim=0)
+            self.memory_values = torch.cat([self.memory_values, value_states], dim=0)
 
-    def get_memory(self) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
-        return self.memory_states, self.memory_position_ids
+    def get_memory_key_value(self) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+        return self.memory_keys, self.memory_values
 
     def get_seq_length(self) -> int:
-        if self.memory_states is None:
+        if self.memory_keys is None:
             return 0
-        return self.memory_states.shape[0]
+        return self.memory_keys.shape[0]
 
 
 @auto_docstring
@@ -190,7 +238,9 @@ class YOCOSlidingWindowAttention(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
-        self.num_key_value_heads = config.num_key_value_heads
+        # Official YOCO SWA uses full self-attention heads for Q/K/V. Llama GQA is
+        # preserved only in the cross-decoder shared K/V path.
+        self.num_key_value_heads = config.num_attention_heads
         self.head_dim = config.hidden_size // config.num_attention_heads
         self.scaling = self.head_dim ** -0.5
         self.window_size = window_size
@@ -249,7 +299,8 @@ class YOCOSlidingWindowAttention(nn.Module):
                 max_seqlen_k=key_states.shape[0],
                 dropout_p=0.0,
                 softmax_scale=self.scaling,
-                causal=False,
+                causal=True,
+                window_size=(self.window_size - 1, 0),
             )
 
         attn_output = attn_output.view(1, hidden_states.shape[1], -1)
@@ -307,21 +358,18 @@ class YOCOCrossAttention(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
-        self.num_key_value_heads = config.num_key_value_heads
         self.head_dim = config.hidden_size // config.num_attention_heads
         self.scaling = self.head_dim ** -0.5
 
         self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=False)
-        self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
-        self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
 
     def forward(
         self,
         hidden_states: torch.Tensor,
-        memory_states: torch.Tensor,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
         query_position_embeddings: Tuple[torch.Tensor, torch.Tensor],
-        memory_position_embeddings: Tuple[torch.Tensor, torch.Tensor],
         cu_seqlens_q: torch.Tensor,
         max_seqlen_q: int,
         cu_seqlens_k: torch.Tensor,
@@ -329,16 +377,12 @@ class YOCOCrossAttention(nn.Module):
         causal: bool,
     ) -> torch.Tensor:
         q = self.q_proj(hidden_states).view(-1, self.num_heads, self.head_dim)
-        k = self.k_proj(memory_states).view(-1, self.num_key_value_heads, self.head_dim)
-        v = self.v_proj(memory_states).view(-1, self.num_key_value_heads, self.head_dim)
-
         q = _apply_rotary_to_single(q, query_position_embeddings)
-        k = _apply_rotary_to_single(k, memory_position_embeddings)
 
         attn_output = flash_attn_varlen_func(
             q,
-            k,
-            v,
+            key_states,
+            value_states,
             cu_seqlens_q=cu_seqlens_q,
             cu_seqlens_k=cu_seqlens_k,
             max_seqlen_q=max_seqlen_q,
@@ -366,9 +410,9 @@ class YOCOCrossDecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        memory_states: torch.Tensor,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
         query_position_embeddings: Tuple[torch.Tensor, torch.Tensor],
-        memory_position_embeddings: Tuple[torch.Tensor, torch.Tensor],
         cu_seqlens_q: torch.Tensor,
         max_seqlen_q: int,
         cu_seqlens_k: torch.Tensor,
@@ -379,9 +423,9 @@ class YOCOCrossDecoderLayer(nn.Module):
         hidden_states = self.input_layernorm(hidden_states)
         hidden_states = self.cross_attn(
             hidden_states,
-            memory_states,
+            key_states,
+            value_states,
             query_position_embeddings,
-            memory_position_embeddings,
             cu_seqlens_q,
             max_seqlen_q,
             cu_seqlens_k,
@@ -406,7 +450,9 @@ class YOCOSelfDecoder(YOCOPreTrainedModel):
     def __init__(self, config: YOCOConfig):
         text_config = config.get_text_config()
         super().__init__(config)
-        self.window_size = getattr(text_config, "sliding_window", 512)
+        self.window_size = getattr(config, "sliding_window", None)
+        if self.window_size is None:
+            self.window_size = getattr(text_config, "sliding_window", 1024)
         self.layers = nn.ModuleList(
             [YOCOSelfDecoderLayer(text_config, self.window_size) for _ in range(config.num_self_decoder_layers)]
         )
@@ -433,14 +479,29 @@ class YOCOSelfDecoder(YOCOPreTrainedModel):
                 past_k, past_v = past_key_values.get_self_layer_cache(layer_idx)
                 if past_k is not None:
                     layer_past = (past_k, past_v)
-            hidden_states, next_past = layer(
-                hidden_states,
-                position_embeddings,
-                cu_seqlens_q,
-                max_seqlen_q,
-                past_key_value=layer_past,
-                use_cache=use_cache,
-            )
+            if self.gradient_checkpointing and self.training and not use_cache:
+                def custom_forward(hidden_states):
+                    layer_output, _ = layer(
+                        hidden_states,
+                        position_embeddings,
+                        cu_seqlens_q,
+                        max_seqlen_q,
+                        past_key_value=None,
+                        use_cache=False,
+                    )
+                    return layer_output
+
+                hidden_states = checkpoint(custom_forward, hidden_states, use_reentrant=False)
+                next_past = None
+            else:
+                hidden_states, next_past = layer(
+                    hidden_states,
+                    position_embeddings,
+                    cu_seqlens_q,
+                    max_seqlen_q,
+                    past_key_value=layer_past,
+                    use_cache=use_cache,
+                )
             if use_cache and past_key_values is not None and next_past is not None:
                 past_key_values.update_self_layer_cache(layer_idx, *next_past)
 
@@ -458,18 +519,43 @@ class YOCOCrossDecoder(YOCOPreTrainedModel):
         super().__init__(config)
         start_idx = config.num_self_decoder_layers
         end_idx = start_idx + config.num_cross_decoder_layers
+        self.hidden_size = text_config.hidden_size
+        self.num_key_value_heads = text_config.num_key_value_heads
+        self.head_dim = text_config.hidden_size // text_config.num_attention_heads
+        self.k_proj = nn.Linear(
+            self.hidden_size,
+            self.num_key_value_heads * self.head_dim,
+            bias=False,
+        )
+        self.v_proj = nn.Linear(
+            self.hidden_size,
+            self.num_key_value_heads * self.head_dim,
+            bias=False,
+        )
+        self.kv_layer_norm = LlamaRMSNorm(text_config.hidden_size, eps=text_config.rms_norm_eps)
         self.layers = nn.ModuleList(
             [YOCOCrossDecoderLayer(text_config, layer_idx) for layer_idx in range(start_idx, end_idx)]
         )
         self.gradient_checkpointing = False
         self.post_init()
 
+    def project_memory(
+        self,
+        memory_states: torch.Tensor,
+        memory_position_embeddings: Tuple[torch.Tensor, torch.Tensor],
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        memory_states = self.kv_layer_norm(memory_states)
+        key_states = self.k_proj(memory_states).view(-1, self.num_key_value_heads, self.head_dim)
+        value_states = self.v_proj(memory_states).view(-1, self.num_key_value_heads, self.head_dim)
+        key_states = _apply_rotary_to_single(key_states, memory_position_embeddings)
+        return key_states, value_states
+
     def forward(
         self,
         hidden_states: torch.Tensor,
-        memory_states: torch.Tensor,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
         query_position_embeddings: Tuple[torch.Tensor, torch.Tensor],
-        memory_position_embeddings: Tuple[torch.Tensor, torch.Tensor],
         cu_seqlens_q: torch.Tensor,
         max_seqlen_q: int,
         cu_seqlens_k: torch.Tensor,
@@ -482,17 +568,39 @@ class YOCOCrossDecoder(YOCOPreTrainedModel):
         for layer in self.layers:
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
-            hidden_states = layer(
-                hidden_states,
-                memory_states,
-                query_position_embeddings,
-                memory_position_embeddings,
-                cu_seqlens_q,
-                max_seqlen_q,
-                cu_seqlens_k,
-                max_seqlen_k,
-                causal,
-            )
+            if self.gradient_checkpointing and self.training:
+                def custom_forward(hidden_states, key_states, value_states):
+                    return layer(
+                        hidden_states,
+                        key_states,
+                        value_states,
+                        query_position_embeddings,
+                        cu_seqlens_q,
+                        max_seqlen_q,
+                        cu_seqlens_k,
+                        max_seqlen_k,
+                        causal,
+                    )
+
+                hidden_states = checkpoint(
+                    custom_forward,
+                    hidden_states,
+                    key_states,
+                    value_states,
+                    use_reentrant=False,
+                )
+            else:
+                hidden_states = layer(
+                    hidden_states,
+                    key_states,
+                    value_states,
+                    query_position_embeddings,
+                    cu_seqlens_q,
+                    max_seqlen_q,
+                    cu_seqlens_k,
+                    max_seqlen_k,
+                    causal,
+                )
 
         return hidden_states, all_hidden_states
 
@@ -586,34 +694,41 @@ class YOCOTextModel(YOCOPreTrainedModel):
             # During the initial prefill call we want the same token-to-token
             # semantics as the no-cache path: each query position can only read
             # self-decoder memory up to its own position.
-            memory_states = self_hidden_states
             memory_position_embeddings = query_position_embeddings
+            key_states, value_states = self.cross_decoder.project_memory(
+                self_hidden_states,
+                memory_position_embeddings,
+            )
             cu_seqlens_k = cu_seqlens_q
             max_seqlen_k = max_seqlen_q
             causal = True
         elif use_cache:
-            past_key_values.append_memory(self_hidden_states, position_ids)
-            memory_states, memory_position_ids = past_key_values.get_memory()
-            memory_states = memory_states.unsqueeze(0)
-            memory_position_ids = memory_position_ids.unsqueeze(0)
-            memory_position_embeddings = self.rotary_emb(memory_states, memory_position_ids)
-            cu_seqlens_k = torch.tensor(
-                [0, memory_states.shape[1]], dtype=torch.int32, device=hidden_states.device
+            new_key_states, new_value_states = self.cross_decoder.project_memory(
+                self_hidden_states,
+                query_position_embeddings,
             )
-            max_seqlen_k = memory_states.shape[1]
-            causal = False
+            past_key_values.append_memory_key_value(new_key_states, new_value_states)
+            key_states, value_states = past_key_values.get_memory_key_value()
+            cu_seqlens_k = torch.tensor(
+                [0, key_states.shape[0]], dtype=torch.int32, device=hidden_states.device
+            )
+            max_seqlen_k = key_states.shape[0]
+            causal = True
         else:
-            memory_states = self_hidden_states
             memory_position_embeddings = query_position_embeddings
+            key_states, value_states = self.cross_decoder.project_memory(
+                self_hidden_states,
+                memory_position_embeddings,
+            )
             cu_seqlens_k = cu_seqlens_q
             max_seqlen_k = max_seqlen_q
             causal = True
 
         cross_hidden_states, cross_all_hidden_states = self.cross_decoder(
             self_hidden_states,
-            memory_states,
+            key_states,
+            value_states,
             query_position_embeddings,
-            memory_position_embeddings,
             cu_seqlens_q,
             max_seqlen_q,
             cu_seqlens_k,
@@ -625,7 +740,7 @@ class YOCOTextModel(YOCOPreTrainedModel):
         hidden_states = self.norm(cross_hidden_states)
 
         if use_cache and previous_memory_len == 0 and max_seqlen_q > 1:
-            past_key_values.append_memory(self_hidden_states, position_ids)
+            past_key_values.append_memory_key_value(key_states, value_states)
 
         all_hidden_states = None
         if output_hidden_states:
@@ -648,7 +763,7 @@ class YOCOForCausalLM(YOCOPreTrainedModel, GenerationMixin):
     """Causal LM wrapper for the YOCO-Llama baseline."""
 
     config_class = YOCOConfig
-    _supports_static_cache = True
+    _supports_static_cache = False
     base_model_prefix = "language_model"
 
     def __init__(self, config: YOCOConfig):
@@ -792,7 +907,12 @@ class YOCOForCausalLM(YOCOPreTrainedModel, GenerationMixin):
         )
 
         logits = _slice_logits(self.lm_head, outputs.last_hidden_state, logits_to_keep)
-        loss = _compute_loss(logits, labels, shift_labels, self.vocab_size)
+        loss_logits = logits
+        if labels is not None and shift_labels is None and not (
+            isinstance(logits_to_keep, int) and logits_to_keep == 0
+        ):
+            loss_logits = _slice_logits(self.lm_head, outputs.last_hidden_state, 0)
+        loss = _compute_loss(loss_logits, labels, shift_labels, self.vocab_size)
 
         return CausalLMOutputWithPast(
             loss=loss,
