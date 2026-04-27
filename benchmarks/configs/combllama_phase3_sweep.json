@@ -1,0 +1,36 @@
+{
+  "run_name": "combllama_phase3_compression_sweep",
+  "model": {
+    "name": "combllama",
+    "model_path": "/data3/junhaohu/model/CombLlama-8B-Instruct",
+    "tokenizer_path": "/data3/junhaohu/.cache/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659",
+    "dtype": "bfloat16",
+    "device": "cuda",
+    "chunk_size": 1024,
+    "recent_window_tokens": 1024,
+    "compression_ratio": 1.0,
+    "retention_policy": "all_encoder_chunks",
+    "use_chat_template": true,
+    "cache_chunk_states": true
+  },
+  "generation": {
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "max_new_tokens": 32,
+    "stop_on_eos": true
+  },
+  "sweep": {
+    "compression_ratios": [1.0, 0.5, 0.25, 0.125],
+    "default_limit_per_benchmark": 0
+  },
+  "benchmarks": [
+    "RULER",
+    "LongBench",
+    "SCBench",
+    "LongCodeBench",
+    "LoCoMo"
+  ],
+  "paths": {
+    "output_dir": "benchmarks/results/phase3_combllama_sweep"
+  }
+}

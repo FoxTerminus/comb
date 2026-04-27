@@ -1,0 +1,26 @@
+[
+  {
+    "retention_policy": "keep_recent",
+    "compression_ratio": 0.5,
+    "path": "benchmarks/results/phase8_mock_retention_check/dev_predictions_keep_recent_cr0p5.jsonl",
+    "num_examples": 1
+  },
+  {
+    "retention_policy": "keep_early",
+    "compression_ratio": 0.5,
+    "path": "benchmarks/results/phase8_mock_retention_check/dev_predictions_keep_early_cr0p5.jsonl",
+    "num_examples": 1
+  },
+  {
+    "retention_policy": "keep_even",
+    "compression_ratio": 0.5,
+    "path": "benchmarks/results/phase8_mock_retention_check/dev_predictions_keep_even_cr0p5.jsonl",
+    "num_examples": 1
+  },
+  {
+    "retention_policy": "oracle_keep_answer",
+    "compression_ratio": 0.5,
+    "path": "benchmarks/results/phase8_mock_retention_check/dev_predictions_oracle_keep_answer_cr0p5.jsonl",
+    "num_examples": 1
+  }
+]

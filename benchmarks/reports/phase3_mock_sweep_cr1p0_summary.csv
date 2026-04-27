@@ -1,0 +1,3 @@
+benchmark,task,compression_ratio,num_examples,exact_match,contains_match,token_f1,avg_peak_memory_gb,avg_prefill_latency_s,avg_decode_latency_s,avg_tokens_per_second,num_errors
+RULER,passkey_retrieval_early,1.0,1,1.0,1.0,1.0,,0.0,0.0,,0
+RULER,passkey_retrieval_middle,1.0,1,1.0,1.0,1.0,,0.0,0.0,,0

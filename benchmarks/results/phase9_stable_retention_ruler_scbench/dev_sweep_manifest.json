@@ -1,0 +1,26 @@
+[
+  {
+    "retention_policy": "keep_early",
+    "compression_ratio": 0.5,
+    "path": "benchmarks/results/phase9_stable_retention_ruler_scbench/dev_predictions_keep_early_cr0p5.jsonl",
+    "num_examples": 16
+  },
+  {
+    "retention_policy": "keep_early",
+    "compression_ratio": 0.25,
+    "path": "benchmarks/results/phase9_stable_retention_ruler_scbench/dev_predictions_keep_early_cr0p25.jsonl",
+    "num_examples": 16
+  },
+  {
+    "retention_policy": "keep_even",
+    "compression_ratio": 0.5,
+    "path": "benchmarks/results/phase9_stable_retention_ruler_scbench/dev_predictions_keep_even_cr0p5.jsonl",
+    "num_examples": 16
+  },
+  {
+    "retention_policy": "keep_even",
+    "compression_ratio": 0.25,
+    "path": "benchmarks/results/phase9_stable_retention_ruler_scbench/dev_predictions_keep_even_cr0p25.jsonl",
+    "num_examples": 16
+  }
+]

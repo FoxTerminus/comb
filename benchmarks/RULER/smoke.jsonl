@@ -1,0 +1,1 @@
+{"id":"ruler_smoke_retrieval","benchmark":"RULER","task":"retrieval","context":"Passage A says the access key is redwood. Passage B says the decoy key is copper.","question":"What is the access key?","answer":"redwood"}

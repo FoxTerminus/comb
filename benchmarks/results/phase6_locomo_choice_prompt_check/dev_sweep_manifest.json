@@ -1,0 +1,22 @@
+[
+  {
+    "compression_ratio": 1.0,
+    "path": "benchmarks/results/phase6_locomo_choice_prompt_check/dev_predictions_cr1p0.jsonl",
+    "num_examples": 1
+  },
+  {
+    "compression_ratio": 0.5,
+    "path": "benchmarks/results/phase6_locomo_choice_prompt_check/dev_predictions_cr0p5.jsonl",
+    "num_examples": 1
+  },
+  {
+    "compression_ratio": 0.25,
+    "path": "benchmarks/results/phase6_locomo_choice_prompt_check/dev_predictions_cr0p25.jsonl",
+    "num_examples": 1
+  },
+  {
+    "compression_ratio": 0.125,
+    "path": "benchmarks/results/phase6_locomo_choice_prompt_check/dev_predictions_cr0p125.jsonl",
+    "num_examples": 1
+  }
+]

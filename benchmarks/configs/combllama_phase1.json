@@ -1,0 +1,31 @@
+{
+  "run_name": "combllama_phase1_local_examples",
+  "model": {
+    "name": "combllama",
+    "model_path": "/data3/junhaohu/model/CombLlama-8B-Instruct",
+    "tokenizer_path": "/data3/junhaohu/.cache/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659",
+    "dtype": "bfloat16",
+    "device": "cuda",
+    "chunk_size": 64,
+    "recent_window_tokens": 48,
+    "compression_ratio": 1.0,
+    "use_chat_template": true,
+    "cache_chunk_states": true
+  },
+  "generation": {
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "max_new_tokens": 4,
+    "stop_on_eos": true
+  },
+  "benchmarks": [
+    "RULER",
+    "LongBench",
+    "SCBench",
+    "LongCodeBench",
+    "LoCoMo"
+  ],
+  "paths": {
+    "output_dir": "benchmarks/results/phase1_combllama"
+  }
+}
