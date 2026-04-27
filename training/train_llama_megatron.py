@@ -40,9 +40,9 @@ def parse_args():
     parser.add_argument("--grad-clip", type=float, default=1.0)
     parser.add_argument("--bf16", action="store_true", default=True)
     parser.add_argument("--model-name", type=str, default="meta-llama/Llama-3.1-8B-Instruct")
-    parser.add_argument("--output-dir", type=str, default="/data3/junhaohu/model/CombLlama-11B-Instruct-megatron")
-    parser.add_argument("--ckpt-dir", type=str, default="/data3/junhaohu/checkpoints/CombLlama-11B-Instruct-megatron")
-    parser.add_argument("--resume-ckpt", type=str, default="/data3/junhaohu/checkpoints/CombLlama-11B-Instruct-megatron/step_5219",
+    parser.add_argument("--output-dir", type=str, default="/data3/junhaohu/model/CombLlama-8B-Instruct")
+    parser.add_argument("--ckpt-dir", type=str, default="/data3/junhaohu/checkpoints/CombLlama-8B-Instruct")
+    parser.add_argument("--resume-ckpt", type=str, default=None,
                         help="Path to checkpoint directory to resume from")
     parser.add_argument("--log-interval", type=int, default=100,
                         help="Log every N global steps to training_loss.csv")

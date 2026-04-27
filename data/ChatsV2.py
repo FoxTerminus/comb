@@ -32,7 +32,13 @@ class ChatsV2Dataset(DatasetBase):
                 num_proc=CPU_NUM)
 
     def _batching(self, example):
-        formatted_messages = [{"role": "user" if msg["from"] == "human" else "assistant", "content": msg["value"]} for msg in example['conversations']]
+        formatted_messages = [
+            {
+                "role": "system" if msg["from"] == "system" else "user" if msg["from"] == "human" else "assistant",
+                "content": msg["value"],
+            }
+            for msg in example['conversations']
+        ]
         dialogue_tokens = self.tokenizer.apply_chat_template(formatted_messages)
 
         message_tokens = []
@@ -41,8 +47,9 @@ class ChatsV2Dataset(DatasetBase):
             if token == EOT_TOKEN_ID:
                 message_tokens.append(dialogue_tokens[start:i + 1])
                 start = i + 1
-        # Exclude the first message (system prompt)
-        return {"message_tokens": message_tokens[1:]}
+        if formatted_messages and formatted_messages[0]["role"] == "system":
+            message_tokens = message_tokens[1:]
+        return {"message_tokens": message_tokens}
 
     @staticmethod
     def _build_shift_labels(messages):

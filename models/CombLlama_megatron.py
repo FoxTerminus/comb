@@ -61,6 +61,28 @@ class _AllGatherFunc(Function):
         return chunks[ctx.tp_rank].contiguous(), None
 
 
+class _CopyToTensorParallelRegionFunc(Function):
+    """Identity in forward, all-reduce gradients in backward.
+
+    Column-parallel layers consume replicated inputs and produce sharded outputs.
+    Their input gradients are partial on each TP rank and must be summed before
+    flowing into previous replicated activations.
+    """
+
+    @staticmethod
+    def forward(ctx, tensor, group):
+        ctx.group = group
+        return tensor
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        if ctx.group is None or dist.get_world_size(ctx.group) == 1:
+            return grad_output, None
+        grad_input = grad_output.contiguous()
+        dist.all_reduce(grad_input, op=dist.ReduceOp.SUM, group=ctx.group)
+        return grad_input, None
+
+
 def all_reduce(tensor: torch.Tensor, group: dist.ProcessGroup) -> torch.Tensor:
     """Autograd-safe all-reduce sum."""
     return _AllReduceFunc.apply(tensor, group)
@@ -69,6 +91,11 @@ def all_reduce(tensor: torch.Tensor, group: dist.ProcessGroup) -> torch.Tensor:
 def all_gather_last_dim(tensor: torch.Tensor, group: dist.ProcessGroup) -> torch.Tensor:
     """Autograd-safe all-gather along the last dimension."""
     return _AllGatherFunc.apply(tensor, group)
+
+
+def copy_to_tensor_parallel_region(tensor: torch.Tensor, group: dist.ProcessGroup) -> torch.Tensor:
+    """Replicate input in forward and sum its gradient across TP ranks."""
+    return _CopyToTensorParallelRegionFunc.apply(tensor, group)
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +137,8 @@ class ColumnParallelLinear(nn.Module):
             self.register_parameter("bias", None)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.tp_size > 1:
+            x = copy_to_tensor_parallel_region(x, self.tp_group)
         output = nn.functional.linear(x, self.weight, self.bias)
         if self.gather_output and self.tp_size > 1:
             output = all_gather_last_dim(output, self.tp_group)
