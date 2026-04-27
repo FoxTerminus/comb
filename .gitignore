@@ -1,1 +1,10 @@
 __pycache__/
+
+# Local benchmark data and generated run artifacts can exceed GitHub limits.
+benchmarks/*/dev.jsonl
+benchmarks/*/phase1.jsonl
+benchmarks/*/smoke.jsonl
+benchmarks/reports/phase*/
+benchmarks/results/phase*/
+benchmarks/reports/archive/
+benchmarks/results/archive/
