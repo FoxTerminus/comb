@@ -1,0 +1,2 @@
+"""SambaY tests."""
+

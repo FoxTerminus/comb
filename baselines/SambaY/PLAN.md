@@ -2,12 +2,16 @@
 
 ## Progress Snapshot
 
-Last synced: `2026-04-27`
+Last synced: `2026-04-28`
 
 Current status:
 
 - `baselines/SambaY/SambaY.pdf` is present locally.
-- No SambaY model, initialization script, training path, TP adapter, tests, or benchmark config exists yet.
+- SambaY now has Stage 0 design docs, a correctness-first model skeleton, dedicated data preprocessing, CPU smoke tests, and a tiny Llama initialization path.
+- SambaY now also has native raw-dataset wrappers that download/load multi-turn chat datasets and tokenize full conversations directly into SambaY samples.
+- Architecture fidelity pass: the model now follows the ArchScale YOCO schedule: first-half Samba local layers, one forced Mamba `gmu_save` layer, one boundary full-attention shared-KV layer, then GMU/cross-attention layers. Official `mamba_ssm` and `causal_conv1d` are installed in the `mamba` conda env, and CUDA smoke on `CUDA_VISIBLE_DEVICES=5,6` verified finite loss with ArchScale-style Mamba scan memory.
+- The full `/data3/junhaohu/model/SambaY-Llama-8B-Init` checkpoint has been initialized from the local Llama-3.1-8B-Instruct snapshot, audited, and smoke-tested on `CUDA_VISIBLE_DEVICES=5,6`.
+- Full training script now supports both single-process smoke training and YOCO-style `torchrun` multi-GPU TP/DP training. Single-process CPU smoke and 2-rank CUDA TP smoke on `CUDA_VISIBLE_DEVICES=5,6` pass. Benchmark config does not exist yet.
 - The official implementation reference is `microsoft/ArchScale`, not the older standalone `microsoft/Samba` repository.
 - The baseline target is `Llama-3.1-8B-Instruct` as backbone, built as a structural baseline against `CombLlama`.
 
@@ -68,15 +72,19 @@ Reference links:
 Use the official SambaY design, adapted conservatively to Llama-3.1-8B:
 
 - total layers: 32, matching Llama-3.1-8B
-- self-decoder: first 16 logical layers
-- cross-decoder: last 16 logical layers
+- ArchScale global schedule for `sambay_d*`:
+  - layers `0..15`: first-half Samba local layers
+  - layer `16`: forced Mamba `gmu_save` layer that produces GMU memory
+  - layer `17`: full-attention boundary layer that produces shared YOCO K/V
+  - layers `18..31`: cross-decoder layers that interleave GMU and shared-KV cross-attention
 - self-decoder token mixers:
   - Mamba-1 on every second layer by default, matching `rnn_per_layer=2`
   - sliding-window attention on the remaining local layers
-  - one full-attention layer at the self/cross boundary to generate the shared KV cache
+  - one extra forced Mamba-1 layer at the YOCO boundary to save GMU memory
+  - one full-attention layer after that to generate the shared KV cache
 - cross-decoder:
   - cross-attention layers reuse the single shared KV cache
-  - GMU layers replace every other cross-attention layer, matching `gmu_per_layer=2`
+  - GMU layers replace every other cross-attention layer using ArchScale global layer indexing, matching `gmu_per_layer=2`
 - positional encoding:
   - default SambaY path uses NoPE for hybrid SSM architectures
   - if Llama weight initialization is too unstable under immediate NoPE conversion, keep a controlled ablation flag `use_rope_for_llama_init=True`, but the official baseline should report NoPE results separately
@@ -98,6 +106,7 @@ Llama initialization is useful but only partially structural:
   - do not create per-layer K/V projections in yoco-cross layers
   - shared K/V projections come from the boundary full-attention layer
 - Mamba layers: no direct Llama equivalent; initialize with official Mamba initialization, then train full-parameter
+- the forced boundary `gmu_save` Mamba layer copies only compatible RMSNorm/MLP weights from the corresponding Llama layer; its Mamba mixer is newly initialized
 - GMU layers: initialize `in_proj` and `out_proj` with the repository default linear initialization; zero biases when present
 - all parameters remain trainable
 
@@ -109,16 +118,16 @@ Goal: prevent SambaY from drifting into CombLlama or naive Samba+YOCO.
 
 TODO:
 
-- [ ] Create `STAGE0_DESIGN.md`
-- [ ] Freeze `SambaY-Llama-8B-Init` as a plain causal-LM baseline
-- [ ] Explicitly exclude `chunk_ids`, `chunk_model`, and Comb cross-attention states
-- [ ] Define the official variant as `Mamba-1 + SWA + one shared full-attn KV + interleaved GMU/cross-attn`
+- [x] Create `STAGE0_DESIGN.md`
+- [x] Freeze `SambaY-Llama-8B-Init` as a plain causal-LM baseline
+- [x] Explicitly exclude `chunk_ids`, `chunk_model`, and Comb cross-attention states
+- [x] Define the official variant as `Mamba-1 + SWA + one shared full-attn KV + interleaved GMU/cross-attn`
 - [ ] Define ablations separately: `Samba+YOCO`, `SWA+YOCO`, `SambaY+RoPE`, `SambaY+DA`
 
 Acceptance:
 
-- [ ] One-page design note describes SambaY without referencing Comb internals
-- [ ] Model can be summarized as `decoder-hybrid-decoder with shared KV and GMU memory`
+- [x] One-page design note describes SambaY without referencing Comb internals
+- [x] Model can be summarized as `decoder-hybrid-decoder with shared KV and GMU memory`
 
 ### Stage 1: Implement Core Model Skeleton
 
@@ -126,19 +135,19 @@ Goal: add an isolated HuggingFace-style model family.
 
 TODO:
 
-- [ ] Add `baselines/SambaY/models/SambaY.py`
-- [ ] Add `SambaYConfig`
-- [ ] Add `SambaYPreTrainedModel`
-- [ ] Add `SambaYSelfDecoder`
-- [ ] Add `SambaYCrossDecoder`
-- [ ] Add `SambaYTextModel`
-- [ ] Add `SambaYForCausalLM`
-- [ ] Add `SambaYDynamicCache`
+- [x] Add `baselines/SambaY/models/SambaY.py`
+- [x] Add `SambaYConfig`
+- [x] Add `SambaYPreTrainedModel`
+- [x] Add `SambaYSelfDecoder`
+- [x] Add `SambaYCrossDecoder`
+- [x] Add `SambaYTextModel`
+- [x] Add `SambaYForCausalLM`
+- [x] Add `SambaYDynamicCache`
 
 Acceptance:
 
-- [ ] Model instantiates from a tiny config
-- [ ] Module tree clearly separates self-decoder, shared KV producer, GMU layers, and cross-attention layers
+- [x] Model instantiates from a tiny config
+- [x] Module tree clearly separates self-decoder, shared KV producer, GMU layers, and cross-attention layers
 
 ### Stage 2: Implement Samba Self-Decoder
 
@@ -146,18 +155,20 @@ Goal: reproduce the SambaY self-decoder branch that produces both KV and GMU mem
 
 TODO:
 
-- [ ] Implement or vendor a minimal Mamba-1 layer compatible with current training dependencies
-- [ ] Implement Mamba `gmu_save` behavior: save SSM scan output before Mamba output projection
-- [ ] Implement sliding-window attention layers
-- [ ] Implement the boundary full-attention layer that materializes shared K/V
-- [ ] Keep attention dimensions compatible with Llama GQA
-- [ ] Add NoPE mode as the official default
+- [x] Implement ArchScale-style Mamba-1 `gmu_save` path backed by installed `mamba_ssm`/`causal_conv1d`; keep a slow deterministic fallback for CPU tests
+- [x] Implement Mamba `gmu_save` behavior: save SSM scan output before Mamba output projection
+- [x] Implement sliding-window attention layers
+- [x] Implement the boundary full-attention layer that materializes shared K/V
+- [x] Ensure the boundary full-attention layer is an actual transformer block that updates hidden states, not only a K/V projection
+- [x] Keep attention dimensions compatible with Llama GQA
+- [x] Add NoPE mode as the official default
 
 Acceptance:
 
-- [ ] Self-decoder forward returns hidden states, shared KV cache, and `gmu_mems`
-- [ ] Tiny forward pass has finite logits/loss
-- [ ] Disabling GMU still leaves a valid Samba+YOCO ablation path
+- [x] Self-decoder forward returns hidden states, shared KV cache, and `gmu_mems`
+- [x] Tiny forward pass has finite logits/loss
+- [x] Disabling GMU still leaves a valid Samba+YOCO ablation path
+- [x] Install/enable official `mamba_ssm` and `causal_conv1d` kernels for the final non-fallback Mamba path
 
 ### Stage 3: Implement GMU/nGMU Cross-Decoder
 
@@ -165,18 +176,18 @@ Goal: implement the actual SambaY distinction from Samba+YOCO.
 
 TODO:
 
-- [ ] Add `GMU` and `GMUWrapper`
-- [ ] Implement `GMU(hidden, memory) = out_proj(SwiGLU(in_proj(hidden), memory))`
-- [ ] Add optional nGMU with RMSNorm after output gating for future Mamba2/GDN variants
-- [ ] Interleave GMU and cross-attention layers in the cross-decoder
-- [ ] Ensure GMU receives the self-decoder SSM memory, not Comb chunk states
-- [ ] Ensure cross-attention layers own Q/O only and read K/V from shared cache
+- [x] Add `GMU` and `GMUWrapper`
+- [x] Implement `GMU(hidden, memory) = out_proj(SwiGLU(in_proj(hidden), memory))`
+- [x] Add optional nGMU with RMSNorm after output gating for future Mamba2/GDN variants
+- [x] Interleave GMU and cross-attention layers in the cross-decoder
+- [x] Ensure GMU receives the self-decoder SSM memory, not Comb chunk states
+- [x] Ensure cross-attention layers own Q/O only and read K/V from shared cache
 
 Acceptance:
 
-- [ ] GMU layers run with `d_mem = 8192` for Llama-8B hidden size
-- [ ] Cross-attention layers reuse exactly one shared KV cache
-- [ ] No cross-decoder layer maintains a private full-history K/V cache
+- [x] GMU layers run with `d_mem = 8192` for Llama-8B hidden size
+- [x] Cross-attention layers reuse exactly one shared KV cache
+- [x] No cross-decoder layer maintains a private full-history K/V cache
 
 ### Stage 4: Cache Semantics and Generation
 
@@ -184,19 +195,19 @@ Goal: support prefill plus token-by-token decode.
 
 TODO:
 
-- [ ] Define `SambaYDynamicCache(shared_kv, gmu_mems, mamba_states, conv_states, seen_tokens)`
-- [ ] During prefill, compute self-decoder once and store shared KV plus GMU memory
-- [ ] During decode, update recurrent Mamba states and reuse shared prompt KV where correct
-- [ ] Implement `prepare_inputs_for_generation`
-- [ ] Implement `_reorder_cache` for batch size 1 first; document limitations
-- [ ] Add greedy generation smoke path
+- [x] Define `SambaYDynamicCache(shared_kv, gmu_mems, mamba_states, conv_states, seen_tokens)`
+- [x] During prefill, compute self-decoder once and store shared KV plus GMU memory
+- [x] During decode, update recurrent Mamba states and reuse shared prompt KV where correct
+- [x] Implement `prepare_inputs_for_generation`
+- [x] Implement `_reorder_cache` for batch size 1 first; document limitations
+- [x] Add greedy generation smoke path
 
 Acceptance:
 
-- [ ] `use_cache=False` forward works
-- [ ] `use_cache=True` prefill + decode works
-- [ ] Manual stepwise decode approximately matches full forward on short prompts within expected bf16 tolerance
-- [ ] Long prompt generation does not allocate per-layer cross-decoder KV histories
+- [x] `use_cache=False` forward works
+- [x] `use_cache=True` prefill + decode works
+- [x] Manual stepwise decode approximately matches full forward on short prompts within expected bf16 tolerance
+- [x] Long prompt generation does not allocate per-layer cross-decoder KV histories
 
 ### Stage 5: Llama-to-SambaY Initialization
 
@@ -204,19 +215,20 @@ Goal: create a reproducible initialization script.
 
 TODO:
 
-- [ ] Add `baselines/SambaY/scripts/init_sambay_from_llama.py`
-- [ ] Load `meta-llama/Llama-3.1-8B-Instruct` or a local checkpoint path
-- [ ] Build `SambaYConfig` from Llama config
-- [ ] Apply deterministic partial mapping
-- [ ] Print loaded, missing, unexpected, and newly initialized parameter groups
-- [ ] Save a HuggingFace-style checkpoint
+- [x] Add `baselines/SambaY/scripts/init_sambay_from_llama.py`
+- [x] Load `meta-llama/Llama-3.1-8B-Instruct` or a local checkpoint path
+- [x] Build `SambaYConfig` from Llama config
+- [x] Apply deterministic partial mapping
+- [x] Print loaded, missing, unexpected, and newly initialized parameter groups
+- [x] Save a HuggingFace-style checkpoint
 
 Acceptance:
 
-- [ ] Script completes on a tiny local Llama fixture
-- [ ] Saved checkpoint reloads
-- [ ] Forward pass after initialization produces finite loss
-- [ ] Parameter and trainable-parameter counts are recorded
+- [x] Script completes on a tiny local Llama fixture
+- [x] Script completes on the local Llama-3.1-8B-Instruct snapshot
+- [x] Saved checkpoint reloads
+- [x] Forward pass after initialization produces finite loss
+- [x] Parameter and trainable-parameter counts are recorded
 
 ### Stage 6: Data and Training Path
 
@@ -225,34 +237,48 @@ Goal: train SambaY as a clean causal-LM baseline.
 Important boundary:
 
 - SambaY may use the same raw datasets as CombLlama and YOCO.
-- SambaY must still own a dedicated preprocessing/collate function because its input contract is different from Comb's chunk path and may diverge from YOCO once Mamba state, NoPE, variable-length packing, and cache-prefill metadata are handled.
+- SambaY must own the full data path from raw dataset download/load through multi-turn chat tokenization and collate because its input contract is different from Comb's chunk path and may diverge from YOCO once Mamba state, NoPE, variable-length packing, and cache-prefill metadata are handled.
 - Do not pass through unused Comb fields just because the shared dataset objects expose them.
 
 TODO:
 
-- [ ] Add `baselines/SambaY/training/data.py`
-- [ ] Implement `preprocess_sambay_example(...)` for raw examples from the shared datasets
-- [ ] Implement `collate_fn_sambay(...)` for packed SambaY batches
-- [ ] Keep dataset selection shared, but keep token packing and batch construction SambaY-specific
-- [ ] Consume `input_ids`, `shift_labels`, `attention_mask` or packed sequence metadata, `cu_seqlens_q`, `max_seqlen_q`
-- [ ] Make `position_ids` optional because official SambaY uses NoPE; include it only for the controlled RoPE ablation path
-- [ ] Produce reset/sequence-boundary metadata needed by Mamba and variable-length packed training
-- [ ] Ensure labels are ordinary next-token LM labels and masking matches the chat/SFT format
-- [ ] Ignore all Comb chunk-specific fields
-- [ ] Add `baselines/SambaY/training/train_sambay_megatron.py`
-- [ ] Use full-parameter training
-- [ ] Reuse current optimizer/scheduler/bf16/checkpoint patterns
+- [x] Add `baselines/SambaY/training/data.py`
+- [x] Add `baselines/SambaY/data/base.py`
+- [x] Add `baselines/SambaY/data/chat_datasets.py`
+- [x] Add `baselines/SambaY/data/__init__.py`
+- [x] Implement SambaY-native dataset classes that call `load_dataset(...)` for the shared raw sources
+- [x] Tokenize complete multi-turn conversations with the model chat template
+- [x] Supervise every assistant turn in the multi-turn dialogue and mask system/user turns
+- [x] Implement `preprocess_sambay_example(...)` for SambaY-native tokenized examples
+- [x] Implement `collate_fn_sambay(...)` for packed SambaY batches
+- [x] Keep dataset selection shared, but keep token packing and batch construction SambaY-specific
+- [x] Consume `input_ids`, `shift_labels`, `attention_mask` or packed sequence metadata, `cu_seqlens_q`, `max_seqlen_q`
+- [x] Make `position_ids` optional because official SambaY uses NoPE; include it only for the controlled RoPE ablation path
+- [x] Produce reset/sequence-boundary metadata needed by Mamba and variable-length packed training
+- [x] Ensure labels are ordinary next-token LM labels and masking matches the chat/SFT format
+- [x] Ignore all Comb chunk-specific fields
+- [x] Add `baselines/SambaY/training/train_sambay_megatron.py`
+- [x] Use full-parameter training
+- [x] Reuse current optimizer/scheduler/bf16/checkpoint patterns
+- [x] Add YOCO-style `torchrun` distributed entry with NCCL process-group initialization
+- [x] Add tensor-parallel and data-parallel group construction via `--tp-size`
+- [x] Add gradient accumulation from `--global-batch-size`, `--micro-batch-size`, and DP world size
+- [x] Add fp32-master AdamW optimizer mode for bf16 full-parameter training
+- [x] Add per-TP-rank model-only distributed checkpoints
 
 Acceptance:
 
-- [ ] Shared raw datasets can be loaded through the SambaY preprocessing path
-- [ ] A preprocessed SambaY example contains only fields required by SambaY
-- [ ] A `collate_fn_sambay` batch runs through the model without `chunk_ids`
-- [ ] Variable-length packed batches expose correct sequence-boundary metadata for Mamba/SWA attention
-- [ ] Single-device synthetic batch trains
-- [ ] Loss decreases on a tiny sample
-- [ ] Tiny-slice overfit is possible
-- [ ] Checkpoint save/resume works
+- [x] Shared raw datasets can be loaded through the SambaY preprocessing path
+- [x] Raw multi-turn conversations are converted directly into SambaY samples without Comb chunk preprocessing
+- [x] Multiple assistant turns in one dialogue are supervised
+- [x] A preprocessed SambaY example contains only fields required by SambaY
+- [x] A `collate_fn_sambay` batch runs through the model without `chunk_ids`
+- [x] Variable-length packed batches expose correct sequence-boundary metadata for Mamba/SWA attention
+- [x] Single-device synthetic batch trains
+- [x] Loss decreases on a tiny sample
+- [x] Tiny-slice overfit is possible
+- [x] Checkpoint save/resume works
+- [x] 2-rank CUDA `torchrun` synthetic TP training smoke runs without using physical GPU0/1
 
 ### Stage 7: Tensor Parallel Support
 
@@ -260,19 +286,21 @@ Goal: make SambaY comparable to YOCO and CombLlama under the current multi-GPU s
 
 TODO:
 
-- [ ] Add `baselines/SambaY/models/SambaY_megatron.py`
-- [ ] Shard attention Q/O and shared K/V projections
-- [ ] Shard MLP projections
-- [ ] Shard GMU `in_proj`/`out_proj`
-- [ ] Handle Mamba projections and convolution state carefully
-- [ ] Verify TP cache behavior
+- [x] Add `baselines/SambaY/models/SambaY_megatron.py`
+- [x] Shard attention Q/O and shared K/V projections
+- [x] Shard MLP projections
+- [x] Shard GMU `in_proj`/`out_proj`
+- [x] Handle Mamba projections and convolution state carefully
+- [x] Verify TP cache behavior
+- [x] Wire TP adapter into the SambaY training launcher before `.to(device)` and DDP wrapping
 
 Acceptance:
 
-- [ ] TP=1 matches non-TP
-- [ ] TP=2 runs forward/backward
-- [ ] Rank losses match within expected tolerance
-- [ ] Cache-enabled generation runs under TP for batch size 1
+- [x] TP=1 matches non-TP
+- [x] TP=2 runs forward/backward
+- [x] Rank losses match within expected tolerance
+- [x] Cache-enabled generation runs under TP for batch size 1
+- [x] `torchrun --nproc_per_node=2 --tp-size 2` trains a tiny synthetic batch and saves TP shards
 
 ### Stage 8: Tests and Verification
 
@@ -280,22 +308,89 @@ Goal: make failures local and easy to diagnose.
 
 TODO:
 
-- [ ] Add `tests/test_sambay_smoke.py`
-- [ ] Add `tests/test_sambay_gmu.py`
-- [ ] Add `tests/test_sambay_cache.py`
-- [ ] Add `tests/test_sambay_init_from_llama.py`
-- [ ] Add `tests/test_sambay_training.py`
-- [ ] Add `VERIFICATION_REPORT.md`
+- [x] Add `tests/test_sambay_smoke.py`
+- [x] Add `tests/test_sambay_gmu.py`
+- [x] Add `tests/test_sambay_cache.py`
+- [x] Add `tests/test_sambay_init_from_llama.py`
+- [x] Add `tests/test_sambay_training.py`
+- [x] Add `tests/distributed_tp2_smoke.py`
+- [x] Add `VERIFICATION_REPORT.md`
 
 Acceptance:
 
-- [ ] Forward/loss test passes
-- [ ] GMU shape and gradient test passes
-- [ ] Cache consistency test passes
-- [ ] Initialization reload test passes
-- [ ] Training smoke and overfit tests pass
+- [x] Forward/loss test passes
+- [x] GMU shape and gradient test passes
+- [x] Cache consistency test passes
+- [x] Initialization reload test passes
+- [x] Training smoke and overfit tests pass
 
-### Stage 9: Benchmark Integration
+### Stage 9: Full-Training Operations
+
+Goal: make the full SambaY run reproducible, monitorable, resumable, and safe
+under the local GPU policy.
+
+Key omissions fixed in this stage:
+
+- the previous plan did not make the full TP4 training launch a first-class artifact
+- it did not define a preflight checklist for data/cache/checkpoint paths
+- it did not define how to monitor loss, grad norm, and token counts during a long run
+- it did not define a resume policy for model-only TP checkpoints
+- it did not explicitly gate all full-training commands away from physical GPU0/1
+
+TODO:
+
+- [x] Add `baselines/SambaY/training/run_full_tp4.sh`
+- [x] Default the launch script to `CUDA_VISIBLE_DEVICES=2,3,4,7`
+- [x] Make the launch script refuse visible physical GPU0/GPU1
+- [x] Allow environment-variable overrides for batch size, LR, seq length, output, log, and checkpoint dirs
+- [x] Allow `RESUME_CKPT=/path/to/step_N` resume through the launch script
+- [x] Add a preflight command that validates checkpoint path, dataset cache writability, CUDA visibility, and Mamba imports before a long run
+- [x] Add `--save-interval` distributed checkpointing for long-running full training
+- [x] Make interval resume continue the same dataset by default instead of skipping it
+- [x] Run a short real-data distributed dry run with `--debug-dataset-name ultrachat_200k`, `--debug-max-samples`, and `--max-steps-per-dataset`
+- [x] Record first 10 dry-run steps: loss, LR, grad norm, total tokens, supervised tokens, max sequence length, peak memory
+- [x] Define interruption protocol: stop only after a checkpoint boundary when possible, resume from the latest `step_N`
+- [x] Add a tiny parser/summary for `training_diagnostics.csv`
+- [x] Ensure only rank 0 performs initial raw-dataset preprocessing/cache writes before other ranks read the cache
+
+Acceptance:
+
+- [x] Full TP4 launch command exists as a checked-in script
+- [x] The launch script has a hard guard against GPU0/GPU1
+- [x] Preflight checks pass on formal visible GPUs `2,3,4,7`
+- [x] A real-data distributed dry run completes on allowed GPUs
+- [x] Latest checkpoint can be resumed with `RESUME_CKPT`/`--resume-ckpt`
+- [x] Training diagnostics are sufficient to detect NaN, zero supervised tokens, runaway grad norm, or unexpected sequence truncation
+
+### Stage 10: Checkpoint Export and Reload
+
+Goal: bridge the gap between TP-sharded training checkpoints and a checkpoint
+that benchmark/inference loaders can consume.
+
+Key omission fixed in this stage:
+
+- the previous plan assumed that "training complete" naturally produces a
+  benchmarkable checkpoint, but the current distributed path saves
+  `tp_rank_*.pt` shards while benchmark loaders usually expect a single
+  HuggingFace-style directory.
+
+TODO:
+
+- [ ] Add `baselines/SambaY/scripts/merge_tp_checkpoint.py`
+- [ ] Merge `tp_rank_*.pt` shards back into an unsharded `SambaYForCausalLM` state dict
+- [ ] Save a HuggingFace-style directory with `config.json`, model weights, and tokenizer metadata when available
+- [ ] Validate merged checkpoint by reloading on a single allowed GPU and running forward loss
+- [ ] Validate cache-enabled generation from the merged checkpoint
+- [ ] Keep the original TP shard checkpoint as the training-resume source of truth
+- [ ] Document when to use TP shard checkpoints versus merged HF checkpoints
+
+Acceptance:
+
+- [ ] A TP training checkpoint can be converted into a single reloadable SambaY checkpoint
+- [ ] The merged checkpoint produces finite loss and generation
+- [ ] Benchmark code can point to the merged checkpoint without training-only TP assumptions
+
+### Stage 11: Benchmark Integration
 
 Goal: compare SambaY against Llama, YOCO, and CombLlama on the same harness.
 
@@ -326,25 +421,37 @@ Acceptance:
 
 New files:
 
-- [ ] `baselines/SambaY/STAGE0_DESIGN.md`
-- [ ] `baselines/SambaY/README.md`
-- [ ] `baselines/SambaY/models/SambaY.py`
-- [ ] `baselines/SambaY/models/SambaY_megatron.py`
-- [ ] `baselines/SambaY/scripts/init_sambay_from_llama.py`
-- [ ] `baselines/SambaY/training/data.py`
-- [ ] `baselines/SambaY/tests/test_sambay_data.py`
-- [ ] `baselines/SambaY/training/train_sambay_megatron.py`
-- [ ] `baselines/SambaY/tests/test_sambay_smoke.py`
-- [ ] `baselines/SambaY/tests/test_sambay_gmu.py`
-- [ ] `baselines/SambaY/tests/test_sambay_cache.py`
-- [ ] `baselines/SambaY/tests/test_sambay_init_from_llama.py`
-- [ ] `baselines/SambaY/VERIFICATION_REPORT.md`
+- [x] `baselines/SambaY/STAGE0_DESIGN.md`
+- [x] `baselines/SambaY/ARCHITECTURE_AUDIT.md`
+- [x] `baselines/SambaY/POST_INIT_AUDIT.md`
+- [x] `baselines/SambaY/README.md`
+- [x] `baselines/SambaY/models/SambaY.py`
+- [x] `baselines/SambaY/models/SambaY_megatron.py`
+- [x] `baselines/SambaY/scripts/init_sambay_from_llama.py`
+- [x] `baselines/SambaY/training/data.py`
+- [x] `baselines/SambaY/data/base.py`
+- [x] `baselines/SambaY/data/chat_datasets.py`
+- [x] `baselines/SambaY/data/__init__.py`
+- [x] `baselines/SambaY/tests/test_sambay_data.py`
+- [x] `baselines/SambaY/tests/test_sambay_native_data.py`
+- [x] `baselines/SambaY/training/train_sambay_megatron.py`
+- [x] `baselines/SambaY/tests/test_sambay_smoke.py`
+- [x] `baselines/SambaY/tests/test_sambay_gmu.py`
+- [x] `baselines/SambaY/tests/test_sambay_cache.py`
+- [x] `baselines/SambaY/tests/test_sambay_init_from_llama.py`
+- [x] `baselines/SambaY/tests/test_sambay_training.py`
+- [x] `baselines/SambaY/tests/distributed_tp2_smoke.py`
+- [x] `baselines/SambaY/training/run_full_tp4.sh`
+- [x] `baselines/SambaY/VERIFICATION_REPORT.md`
+- [x] `baselines/SambaY/training/preflight_full_tp4.py`
+- [x] `baselines/SambaY/training/summarize_diagnostics.py`
+- [ ] `baselines/SambaY/scripts/merge_tp_checkpoint.py`
 - [ ] `benchmarks/configs/sambay_dev.json`
 
 Likely shared changes:
 
-- [ ] `baselines/SambaY/__init__.py`
-- [ ] `baselines/SambaY/models/__init__.py`
+- [x] `baselines/SambaY/__init__.py`
+- [x] `baselines/SambaY/models/__init__.py`
 - [ ] benchmark model loading utilities
 - [ ] optional benchmark report aggregation
 
@@ -361,50 +468,73 @@ Likely shared changes:
 9. Add Llama-to-SambaY initialization.
 10. Add training smoke and tiny overfit.
 11. Add TP only after single-device correctness.
-12. Integrate benchmark config and run dev comparisons.
+12. Add full-training runbook/script and preflight checks.
+13. Run a short distributed real-data dry run.
+14. Run full TP4 training and monitor diagnostics.
+15. Merge TP shards into a benchmarkable HuggingFace-style checkpoint.
+16. Integrate benchmark config and run dev comparisons.
 
 ## Milestone Gates
 
 ### M1: Architecture Complete
 
-- [ ] model instantiates
-- [ ] forward/loss works
-- [ ] GMU and shared KV paths are both active
+- [x] model instantiates
+- [x] forward/loss works
+- [x] GMU and shared KV paths are both active
 
 ### M2: Cache Complete
 
-- [ ] prefill and decode work
-- [ ] cross-decoder uses one shared KV cache
-- [ ] GMU memory is cached separately from KV
+- [x] prefill and decode work
+- [x] cross-decoder uses one shared KV cache
+- [x] GMU memory is cached separately from KV
 
 ### M3: Initialization Complete
 
-- [ ] Llama-to-SambaY script works
-- [ ] checkpoint reload works
-- [ ] missing/new parameters are documented
+- [x] Llama-to-SambaY script works on a tiny local Llama fixture and the full local Llama-3.1-8B-Instruct snapshot
+- [x] checkpoint reload works
+- [x] missing/new parameters are documented
 
 ### M4: Training Complete
 
-- [ ] loss decreases
-- [ ] tiny-slice overfit works
-- [ ] resume works
+- [x] loss decreases
+- [x] tiny-slice overfit works
+- [x] resume works
 
 ### M5: Parallel Complete
 
-- [ ] TP forward/backward works
-- [ ] TP cache works
-- [ ] rank consistency checks pass
+- [x] TP forward/backward works
+- [x] TP cache works
+- [x] rank consistency checks pass
 
-### M6: Baseline Complete
+### M6: Full-Run Ready
 
-- [ ] generation works
+- [x] full TP4 launch script exists
+- [x] launch path blocks physical GPU0/GPU1
+- [x] preflight script exists
+- [x] preflight checks pass
+- [x] real-data distributed dry run passes
+- [x] resume from latest TP shard checkpoint is tested
+
+### M7: Export Complete
+
+- [ ] TP shard checkpoint merges into a single SambaY checkpoint
+- [ ] merged checkpoint reloads
+- [ ] merged checkpoint generates
+
+### M8: Baseline Complete
+
+- [x] generation works
 - [ ] dev benchmark numbers exist
 - [ ] comparison against YOCO and CombLlama is recorded
 
 ## Risks and Mitigations
 
 - Mamba dependency risk: use the installed `mamba_ssm`/`causal_conv1d` path if available; otherwise add a slow correctness fallback for tests.
+- Tensor-parallel Mamba risk: the current TP adapter shards SambaY's Mamba projections and uses the deterministic sharded recurrence path; official fused `mamba_ssm` kernels remain enabled for non-TP CUDA execution. A strictly fused-kernel full-training path would require FSDP/ZeRO-style sharding or a custom official-Mamba TP kernel.
 - Llama initialization mismatch: treat Mamba and GMU as newly initialized modules and require a short full-parameter adaptation stage before benchmarking.
 - NoPE transition risk: keep a RoPE ablation flag for diagnosis, but do not let it replace the official SambaY baseline.
 - Cache correctness risk: write cache tests before TP; debugging TP cache first will be unnecessarily painful.
+- Long-run operations risk: require preflight checks, hard GPU visibility guards, CSV diagnostics, and a tested resume path before starting an unattended full run.
+- Checkpoint format risk: TP shard checkpoints are not automatically benchmark-ready; merge/export and reload validation are required before benchmark integration.
+- Data quality risk: a distributed dry run must confirm nonzero supervised tokens and expected sequence lengths on real SambaY-preprocessed chat data.
 - Benchmark fairness risk: report SambaY as a full-parameter trained architecture baseline, not as a compression-ratio variant unless explicit cache pruning is later added.
