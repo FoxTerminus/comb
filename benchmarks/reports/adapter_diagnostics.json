@@ -1,0 +1,73 @@
+{
+  "ok": false,
+  "results": [
+    {
+      "adapter": "combllama",
+      "device": "cuda",
+      "errors": [
+        "missing Python package: transformers",
+        "missing Python package: torch",
+        "cuda device requested but torch is not installed"
+      ],
+      "model": "combllama",
+      "model_path": "/data3/junhaohu/model/CombLlama-8B-Instruct",
+      "ok": false,
+      "tokenizer_path": "/data3/junhaohu/.cache/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659",
+      "warnings": []
+    },
+    {
+      "adapter": "llama",
+      "device": "cuda",
+      "errors": [
+        "missing Python package: transformers",
+        "missing Python package: torch",
+        "cuda device requested but torch is not installed"
+      ],
+      "model": "llama",
+      "model_path": "/data3/junhaohu/.cache/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659",
+      "ok": false,
+      "tokenizer_path": "/data3/junhaohu/.cache/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659",
+      "warnings": []
+    },
+    {
+      "adapter": "mock",
+      "device": null,
+      "errors": [],
+      "model": "mock",
+      "model_path": "mock",
+      "ok": true,
+      "tokenizer_path": null,
+      "warnings": []
+    },
+    {
+      "adapter": "sambay",
+      "device": "cuda",
+      "errors": [
+        "missing Python package: transformers",
+        "missing Python package: torch",
+        "cuda device requested but torch is not installed",
+        "cannot inspect local adapter module baselines.SambaY.models.SambaY: ModuleNotFoundError: No module named 'torch'"
+      ],
+      "model": "sambay",
+      "model_path": "/data3/junhaohu/model/SambaY-Llama-8B-Init",
+      "ok": false,
+      "tokenizer_path": "/data3/junhaohu/.cache/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659",
+      "warnings": []
+    },
+    {
+      "adapter": "yoco",
+      "device": "cuda",
+      "errors": [
+        "missing Python package: transformers",
+        "missing Python package: torch",
+        "cuda device requested but torch is not installed",
+        "cannot inspect local adapter module baselines.YOCO.models.YOCO: ModuleNotFoundError: No module named 'torch'"
+      ],
+      "model": "yoco",
+      "model_path": "/data3/junhaohu/model/YOCO-Llama-8B-Init",
+      "ok": false,
+      "tokenizer_path": "/data3/junhaohu/.cache/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659",
+      "warnings": []
+    }
+  ]
+}

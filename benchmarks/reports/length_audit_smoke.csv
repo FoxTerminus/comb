@@ -1,0 +1,9 @@
+id,benchmark,task,split,context_tokens,question_tokens,answer_tokens,prompt_tokens,length_bucket,over_limit_models,over_4096,over_8192,over_16384,over_32768,over_65536,over_131072,combllama_est_old_tokens,combllama_est_num_chunks
+locomo-qa,LoCoMo,text_qa,smoke,39,5,2,58,<= 4096,,False,False,False,False,False,False,0,0
+longbench-qa,LongBench,single_doc_qa,smoke,31,7,2,52,<= 4096,,False,False,False,False,False,False,0,0
+longbench-classification,LongBench,classification,smoke,30,7,1,54,<= 4096,,False,False,False,False,False,False,0,0
+longcodebench-codeqa,LongCodeBench,code_qa,smoke,35,7,1,56,<= 4096,,False,False,False,False,False,False,0,0
+ruler-needle,RULER,needle_retrieval,smoke,45,5,1,64,<= 4096,,False,False,False,False,False,False,0,0
+ruler-multihop,RULER,multi_hop_trace,smoke,32,11,1,57,<= 4096,,False,False,False,False,False,False,0,0
+scbench-shared,SCBench,shared_context_retrieval,smoke,30,13,1,57,<= 4096,,False,False,False,False,False,False,0,0
+scbench-semantic,SCBench,semantic_retrieval,smoke,30,5,1,49,<= 4096,,False,False,False,False,False,False,0,0

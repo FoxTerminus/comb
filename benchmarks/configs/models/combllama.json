@@ -1,0 +1,15 @@
+{
+  "adapter": "combllama",
+  "name": "combllama",
+  "model_path": "/data3/junhaohu/model/CombLlama-8B-Instruct",
+  "tokenizer_path": "/data3/junhaohu/.cache/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659",
+  "dtype": "bfloat16",
+  "device": "cuda",
+  "chunk_size": 1024,
+  "recent_window_tokens": 1024,
+  "kv_cache_policy": "chunk_encoder_cross_attention_kv",
+  "kv_cache_policy_notes": "Older context tokens are encoded by the 8-layer chunk encoder; the 32-layer decoder attends to the resulting cross-attention K/V at configured cross-attention layers. The policy is architectural, not a tunable run parameter.",
+  "retention_policy": "all_encoder_chunks",
+  "cache_chunk_states": true,
+  "use_chat_template": true
+}

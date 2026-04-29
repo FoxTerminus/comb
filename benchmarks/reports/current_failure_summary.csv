@@ -1,6 +1,0 @@
-compression_ratio,retention_policy,benchmark,num_examples,collapse_rate,avg_unique_token_ratio,avg_max_token_fraction,avg_max_token_run,avg_kept_chunk_tokens,avg_dropped_chunk_tokens,answer_in_dropped_rate,answer_in_kept_or_decoder_rate
-1.0,all_encoder_chunks,LoCoMo,50,0.0,0.8554767865110648,0.0962727695750417,1.02,18703.62,0.0,0.0,1.0
-1.0,all_encoder_chunks,LongBench,50,0.0,0.8206588662116755,0.12454123853897313,1.02,3071.44,0.0,0.0,0.36
-1.0,all_encoder_chunks,LongCodeBench,50,0.0,0.7818171683940771,0.12333067119092618,1.06,18848.04,0.0,0.0,1.0
-1.0,all_encoder_chunks,RULER,50,0.0,0.6819703540314513,0.12947409389286801,1.0,21223.54,0.0,0.0,1.0
-1.0,all_encoder_chunks,SCBench,50,0.0,0.8150615844423893,0.20312023373942878,1.0,123075.8,0.0,0.0,1.0

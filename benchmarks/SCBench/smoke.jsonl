@@ -1,1 +1,0 @@
-{"id":"scbench_smoke_shared_context","benchmark":"SCBench","task":"semantic_retrieval","context":"Shared context: Ada prefers jasmine tea, Ben prefers espresso, and Chen prefers oolong tea.","question":"Who prefers oolong tea?","answer":"Chen"}

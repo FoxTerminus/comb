@@ -1,0 +1,14 @@
+{
+  "adapter": "yoco",
+  "name": "yoco",
+  "model_path": "/data3/junhaohu/model/YOCO-Llama-8B-Init",
+  "tokenizer_path": "/data3/junhaohu/.cache/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659",
+  "dtype": "bfloat16",
+  "device": "cuda",
+  "kv_cache_policy": "shared_cross_decoder_kv_cache",
+  "kv_cache_policy_notes": "YOCO self-decoder produces reusable memory/KV; all cross-decoder layers share the cross-decoder-level K/V projections instead of each layer generating independent full-history K/V.",
+  "max_context_tokens": 131072,
+  "use_cache": true,
+  "sliding_or_truncation_policy": "left_truncate_when_required",
+  "use_chat_template": true
+}

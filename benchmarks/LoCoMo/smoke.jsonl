@@ -1,1 +1,0 @@
-{"id":"locomo_smoke_temporal_memory","benchmark":"LoCoMo","task":"temporal_memory","context":"Session 1: Mira said she moved to Berlin in March. Session 2: Two months later, Mira said she adopted a cat named Pixel.","question":"Where had Mira moved before adopting Pixel?","answer":"Berlin"}

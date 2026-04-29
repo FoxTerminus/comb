@@ -1,1 +1,0 @@
-{"id":"longbench_smoke_multidoc_qa","benchmark":"LongBench","task":"multi_document_qa","context":"Document 1: The Mars rover stores samples in sealed tubes. Document 2: The return orbiter is responsible for retrieving the sample container.","question":"Which vehicle retrieves the sample container?","answer":"the return orbiter"}

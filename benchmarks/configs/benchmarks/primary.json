@@ -1,0 +1,5 @@
+{
+  "benchmarks": ["RULER", "SCBench", "LongBench"],
+  "role": "primary"
+}
+

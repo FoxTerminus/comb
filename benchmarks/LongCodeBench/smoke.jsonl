@@ -1,1 +1,0 @@
-{"id":"longcodebench_smoke_code_qa","benchmark":"LongCodeBench","task":"code_qa","context":"File math_utils.py:\ndef normalize(x):\n    return x / sum(x)\n\nFile train.py:\nfrom math_utils import normalize\nprobs = normalize([1, 1, 2])","question":"Which function is imported by train.py?","answer":"normalize"}

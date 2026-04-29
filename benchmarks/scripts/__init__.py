@@ -1,1 +1,2 @@
-"""Benchmark infrastructure for CombLlama and long-context baselines."""
+"""Benchmark scripts package."""
+

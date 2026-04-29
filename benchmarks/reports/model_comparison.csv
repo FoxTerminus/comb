@@ -1,0 +1,4 @@
+group,count,success_count,failure_count,primary_score,exact_match,contains_match,f1,rouge_l,classification_accuracy,edit_similarity,avg_peak_memory_gb,avg_prefill_latency_s,avg_decode_latency_s,avg_tokens_per_second,avg_prompt_tokens,max_prompt_tokens
+kv_cache_policy/mock_no_kv_cache,80,80,0,1.0,1.0,1.0,1.0,,1.0,1.0,,0.0,0.0,,168.375,264
+model/mock,80,80,0,1.0,1.0,1.0,1.0,,1.0,1.0,,0.0,0.0,,168.375,264
+overall,80,80,0,1.0,1.0,1.0,1.0,,1.0,1.0,,0.0,0.0,,168.375,264

@@ -1,0 +1,16 @@
+{
+  "run_name": "smoke_sambay",
+  "split": "smoke",
+  "model_config": "benchmarks/configs/models/sambay.json",
+  "generation": {
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "do_sample": false,
+    "max_new_tokens": 16
+  },
+  "benchmarks": ["RULER", "SCBench", "LongBench", "LoCoMo", "LongCodeBench"],
+  "paths": {
+    "output_dir": "benchmarks/results/smoke/smoke_sambay"
+  }
+}
+
