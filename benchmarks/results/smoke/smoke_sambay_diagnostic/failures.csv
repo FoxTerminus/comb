@@ -1,2 +1,0 @@
-model,benchmark,task,id,error
-sambay,RULER,needle_retrieval,ruler-needle,ModelLoadError: AdapterPreflightError: missing Python package: transformers; missing Python package: torch; cuda device requested but torch is not installed; cannot inspect local adapter module baselines.SambaY.models.SambaY: ModuleNotFoundError: No module named 'torch'

@@ -1,2 +1,0 @@
-"""Benchmark scoring utilities."""
-

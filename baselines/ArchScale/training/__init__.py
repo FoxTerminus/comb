@@ -1,1 +1,1 @@
-"""Training utilities for shared ArchScale baselines."""
+"""Training modules for ArchScale baselines."""

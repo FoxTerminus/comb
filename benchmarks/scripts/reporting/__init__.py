@@ -1,2 +1,0 @@
-"""Benchmark reporting utilities."""
-

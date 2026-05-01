@@ -1,0 +1,28 @@
+# Samba+YOCO 1B model configuration (GMU ablation)
+# Aligned with ArchScale `sambayoco_d16`, block_size raised to 65536 for 64K training.
+#
+# Only difference from sambay_1b.yaml: gmu_yoco=false, ar=126 (→ n_embd=2016).
+# This keeps total param count within the same ~973M range.
+
+org: "Microsoft"
+name: "sambayoco_d16"
+block_size: 65536
+vocab_size: 32000
+padding_multiple: 64
+n_layer: 16
+n_head: 16
+n_embd: 2016          # ar * n_layer = 126 * 16
+ar: 126
+mlp_expand: 4
+intermediate_size: 8064
+head_dim: 128
+n_query_groups: 4       # GQA with 4 key-value heads
+rnn_per_layer: 2
+rnn_type: "mamba"
+yoco: true
+gmu_yoco: false         # Gated Memory Unit DISABLED (GMU ablation)
+nope: true
+local_window: 128
+rope_base: 10000
+tied_embed: false
+norm_eps: 1.0e-5

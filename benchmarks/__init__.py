@@ -1,2 +1,0 @@
-"""CombLlama benchmark framework."""
-

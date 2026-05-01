@@ -1,6 +1,0 @@
-{
-  "adapter": "mock",
-  "name": "mock",
-  "model_path": "mock",
-  "kv_cache_policy": "mock_no_kv_cache"
-}

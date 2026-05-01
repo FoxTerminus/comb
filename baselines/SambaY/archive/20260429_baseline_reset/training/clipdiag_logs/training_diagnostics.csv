@@ -1,1 +1,0 @@
-dataset,global_step,loss,lr,grad_norm,total_tokens,supervised_tokens,max_seqlen_q,optimizer_mode,peak_memory_gb
