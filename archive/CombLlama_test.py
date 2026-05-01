@@ -1,7 +1,7 @@
 from torch.testing import assert_close
 from transformers import LlamaConfig
 
-from models.CombLlama import CombLlamaConfig, CombLlamaForConditionalGeneration
+from CombLlama import CombLlamaConfig, CombLlamaForConditionalGeneration
 
 # Initialize the model
 model_name = "meta-llama/Llama-3.1-8B-Instruct"

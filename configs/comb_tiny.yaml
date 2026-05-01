@@ -1,0 +1,11 @@
+# Tiny config for smoke testing — uses Qwen3-0.6B shape (not from_scratch)
+hidden_size: 1024
+num_hidden_layers: 4
+num_attention_heads: 16
+num_key_value_heads: 8
+head_dim: 128
+intermediate_size: 3072
+vocab_size: 151936
+tie_word_embeddings: true
+rms_norm_eps: 1.0e-6
+cross_attention_layers: [1, 3]
