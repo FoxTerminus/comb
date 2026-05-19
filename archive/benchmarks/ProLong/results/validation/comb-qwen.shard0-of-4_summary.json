@@ -1,0 +1,15 @@
+{
+  "model": "comb-qwen",
+  "shard_id": 0,
+  "num_shards": 4,
+  "num_samples": 128,
+  "tokens": 4194304,
+  "loss": 2.2012165882624686,
+  "ppl": 9.035999906538049,
+  "elapsed_sec": 387.69577344483696,
+  "data_dir": "/data3/junhaohu/data/prolong_qwen_v2_validation",
+  "block_size": 98304,
+  "file_start": 0,
+  "file_stride": 80,
+  "note": "Native validation objective; tokenizer/objective differs between comb-qwen and samba models."
+}

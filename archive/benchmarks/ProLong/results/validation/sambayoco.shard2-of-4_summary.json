@@ -1,0 +1,15 @@
+{
+  "model": "sambayoco",
+  "shard_id": 2,
+  "num_shards": 4,
+  "num_samples": 128,
+  "tokens": 8388480,
+  "loss": 2.1279459660872817,
+  "ppl": 8.397600128884944,
+  "elapsed_sec": 190.61852943594567,
+  "data_dir": "/data3/junhaohu/data/prolong_64K_v2/prolong_64K_v2",
+  "block_size": 65536,
+  "file_start": 40,
+  "file_stride": 80,
+  "note": "Native validation objective; tokenizer/objective differs between comb-qwen and samba models."
+}

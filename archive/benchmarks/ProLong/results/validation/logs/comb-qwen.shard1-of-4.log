@@ -1,0 +1,144 @@
+model=comb-qwen samples=128 data_dir=/data3/junhaohu/data/prolong_qwen_v2_validation block_size=98304
+[1/128] loss=1.0857 ppl=2.96 tokens=32768 latency=3.26s
+[2/128] loss=1.9577 ppl=7.08 tokens=32768 latency=2.96s
+[3/128] loss=2.3929 ppl=10.95 tokens=32768 latency=2.97s
+[4/128] loss=1.4747 ppl=4.37 tokens=32768 latency=2.97s
+[5/128] loss=1.1041 ppl=3.02 tokens=32768 latency=2.97s
+[6/128] loss=1.9208 ppl=6.83 tokens=32768 latency=2.97s
+[7/128] loss=2.9588 ppl=19.28 tokens=32768 latency=2.97s
+[8/128] loss=2.3636 ppl=10.63 tokens=32768 latency=2.98s
+[9/128] loss=0.7462 ppl=2.11 tokens=32768 latency=2.98s
+[10/128] loss=2.4646 ppl=11.76 tokens=32768 latency=2.98s
+[11/128] loss=2.4461 ppl=11.54 tokens=32768 latency=2.98s
+[12/128] loss=2.0092 ppl=7.46 tokens=32768 latency=2.99s
+[13/128] loss=2.0493 ppl=7.76 tokens=32768 latency=2.99s
+[14/128] loss=1.3442 ppl=3.84 tokens=32768 latency=2.99s
+[15/128] loss=1.3721 ppl=3.94 tokens=32768 latency=2.99s
+[16/128] loss=2.1268 ppl=8.39 tokens=32768 latency=2.99s
+[17/128] loss=2.3420 ppl=10.40 tokens=32768 latency=2.99s
+[18/128] loss=0.7185 ppl=2.05 tokens=32768 latency=2.99s
+[19/128] loss=1.3696 ppl=3.93 tokens=32768 latency=2.99s
+[20/128] loss=1.9055 ppl=6.72 tokens=32768 latency=2.99s
+[21/128] loss=2.4145 ppl=11.18 tokens=32768 latency=2.99s
+[22/128] loss=3.7351 ppl=41.89 tokens=32768 latency=2.99s
+[23/128] loss=1.4395 ppl=4.22 tokens=32768 latency=2.99s
+[24/128] loss=2.4666 ppl=11.78 tokens=32768 latency=2.99s
+[25/128] loss=1.7120 ppl=5.54 tokens=32768 latency=2.99s
+[26/128] loss=2.9177 ppl=18.50 tokens=32768 latency=2.99s
+[27/128] loss=1.2905 ppl=3.63 tokens=32768 latency=2.99s
+[28/128] loss=1.5213 ppl=4.58 tokens=32768 latency=2.99s
+[29/128] loss=1.9973 ppl=7.37 tokens=32768 latency=2.99s
+[30/128] loss=0.3609 ppl=1.43 tokens=32768 latency=2.99s
+[31/128] loss=1.5521 ppl=4.72 tokens=32768 latency=2.99s
+[32/128] loss=0.6674 ppl=1.95 tokens=32768 latency=2.99s
+[33/128] loss=1.3849 ppl=3.99 tokens=32768 latency=3.00s
+[34/128] loss=2.6978 ppl=14.85 tokens=32768 latency=3.00s
+[35/128] loss=2.4399 ppl=11.47 tokens=32768 latency=3.00s
+[36/128] loss=2.1383 ppl=8.48 tokens=32768 latency=3.00s
+[37/128] loss=3.5281 ppl=34.06 tokens=32768 latency=3.00s
+[38/128] loss=1.6468 ppl=5.19 tokens=32768 latency=3.00s
+[39/128] loss=1.1021 ppl=3.01 tokens=32768 latency=3.00s
+[40/128] loss=3.4035 ppl=30.07 tokens=32768 latency=3.00s
+[41/128] loss=0.9481 ppl=2.58 tokens=32768 latency=3.00s
+[42/128] loss=1.6689 ppl=5.31 tokens=32768 latency=3.00s
+[43/128] loss=0.8060 ppl=2.24 tokens=32768 latency=3.00s
+[44/128] loss=2.4799 ppl=11.94 tokens=32768 latency=3.00s
+[45/128] loss=0.9592 ppl=2.61 tokens=32768 latency=3.00s
+[46/128] loss=2.0642 ppl=7.88 tokens=32768 latency=3.00s
+[47/128] loss=2.1956 ppl=8.99 tokens=32768 latency=3.00s
+[48/128] loss=1.5847 ppl=4.88 tokens=32768 latency=3.00s
+[49/128] loss=1.1449 ppl=3.14 tokens=32768 latency=3.00s
+[50/128] loss=2.6484 ppl=14.13 tokens=32768 latency=3.00s
+[51/128] loss=2.0131 ppl=7.49 tokens=32768 latency=3.00s
+[52/128] loss=2.1508 ppl=8.59 tokens=32768 latency=2.99s
+[53/128] loss=2.1315 ppl=8.43 tokens=32768 latency=2.99s
+[54/128] loss=1.2208 ppl=3.39 tokens=32768 latency=2.99s
+[55/128] loss=1.8799 ppl=6.55 tokens=32768 latency=3.00s
+[56/128] loss=2.2099 ppl=9.11 tokens=32768 latency=3.00s
+[57/128] loss=2.3484 ppl=10.47 tokens=32768 latency=3.00s
+[58/128] loss=1.7593 ppl=5.81 tokens=32768 latency=2.99s
+[59/128] loss=2.1077 ppl=8.23 tokens=32768 latency=3.00s
+[60/128] loss=1.8593 ppl=6.42 tokens=32768 latency=2.99s
+[61/128] loss=1.3782 ppl=3.97 tokens=32768 latency=3.00s
+[62/128] loss=1.3930 ppl=4.03 tokens=32768 latency=2.99s
+[63/128] loss=2.4734 ppl=11.86 tokens=32768 latency=3.00s
+[64/128] loss=1.7750 ppl=5.90 tokens=32768 latency=2.99s
+[65/128] loss=2.6015 ppl=13.48 tokens=32768 latency=2.99s
+[66/128] loss=1.1803 ppl=3.26 tokens=32768 latency=3.00s
+[67/128] loss=2.1111 ppl=8.26 tokens=32768 latency=2.99s
+[68/128] loss=0.7789 ppl=2.18 tokens=32768 latency=3.00s
+[69/128] loss=2.3379 ppl=10.36 tokens=32768 latency=3.00s
+[70/128] loss=2.7287 ppl=15.31 tokens=32768 latency=3.00s
+[71/128] loss=1.4379 ppl=4.21 tokens=32768 latency=3.00s
+[72/128] loss=4.0140 ppl=55.37 tokens=32768 latency=2.99s
+[73/128] loss=1.6573 ppl=5.25 tokens=32768 latency=3.00s
+[74/128] loss=3.0314 ppl=20.73 tokens=32768 latency=3.00s
+[75/128] loss=2.1666 ppl=8.73 tokens=32768 latency=3.00s
+[76/128] loss=0.5410 ppl=1.72 tokens=32768 latency=2.99s
+[77/128] loss=2.7360 ppl=15.43 tokens=32768 latency=2.99s
+[78/128] loss=1.6964 ppl=5.45 tokens=32768 latency=3.00s
+[79/128] loss=2.0246 ppl=7.57 tokens=32768 latency=3.00s
+[80/128] loss=2.2965 ppl=9.94 tokens=32768 latency=2.99s
+[81/128] loss=2.2620 ppl=9.60 tokens=32768 latency=3.00s
+[82/128] loss=1.8210 ppl=6.18 tokens=32768 latency=3.00s
+[83/128] loss=1.7666 ppl=5.85 tokens=32768 latency=2.99s
+[84/128] loss=2.3611 ppl=10.60 tokens=32768 latency=3.00s
+[85/128] loss=2.5465 ppl=12.76 tokens=32768 latency=2.99s
+[86/128] loss=2.0317 ppl=7.63 tokens=32768 latency=2.99s
+[87/128] loss=2.8785 ppl=17.79 tokens=32768 latency=3.00s
+[88/128] loss=0.4969 ppl=1.64 tokens=32768 latency=2.99s
+[89/128] loss=2.2119 ppl=9.13 tokens=32768 latency=2.99s
+[90/128] loss=2.8720 ppl=17.67 tokens=32768 latency=2.99s
+[91/128] loss=2.8207 ppl=16.79 tokens=32768 latency=3.00s
+[92/128] loss=1.8621 ppl=6.44 tokens=32768 latency=3.00s
+[93/128] loss=0.9487 ppl=2.58 tokens=32768 latency=2.99s
+[94/128] loss=1.4703 ppl=4.35 tokens=32768 latency=2.99s
+[95/128] loss=3.0606 ppl=21.34 tokens=32768 latency=3.00s
+[96/128] loss=2.0583 ppl=7.83 tokens=32768 latency=2.99s
+[97/128] loss=4.0375 ppl=56.68 tokens=32768 latency=3.00s
+[98/128] loss=2.2375 ppl=9.37 tokens=32768 latency=3.00s
+[99/128] loss=0.4908 ppl=1.63 tokens=32768 latency=3.00s
+[100/128] loss=1.9494 ppl=7.02 tokens=32768 latency=2.99s
+[101/128] loss=1.9675 ppl=7.15 tokens=32768 latency=3.00s
+[102/128] loss=1.3491 ppl=3.85 tokens=32768 latency=2.99s
+[103/128] loss=2.3286 ppl=10.26 tokens=32768 latency=3.00s
+[104/128] loss=0.9372 ppl=2.55 tokens=32768 latency=3.00s
+[105/128] loss=2.3318 ppl=10.30 tokens=32768 latency=3.00s
+[106/128] loss=1.9905 ppl=7.32 tokens=32768 latency=2.99s
+[107/128] loss=0.9686 ppl=2.63 tokens=32768 latency=2.99s
+[108/128] loss=5.5323 ppl=252.72 tokens=32768 latency=2.99s
+[109/128] loss=2.0527 ppl=7.79 tokens=32768 latency=2.99s
+[110/128] loss=2.4250 ppl=11.30 tokens=32768 latency=3.00s
+[111/128] loss=0.8538 ppl=2.35 tokens=32768 latency=2.99s
+[112/128] loss=1.1556 ppl=3.18 tokens=32768 latency=3.00s
+[113/128] loss=1.9899 ppl=7.31 tokens=32768 latency=3.00s
+[114/128] loss=2.3926 ppl=10.94 tokens=32768 latency=2.99s
+[115/128] loss=2.0191 ppl=7.53 tokens=32768 latency=2.99s
+[116/128] loss=3.1594 ppl=23.56 tokens=32768 latency=2.99s
+[117/128] loss=1.1939 ppl=3.30 tokens=32768 latency=2.99s
+[118/128] loss=1.2672 ppl=3.55 tokens=32768 latency=2.99s
+[119/128] loss=2.7425 ppl=15.53 tokens=32768 latency=2.99s
+[120/128] loss=1.0355 ppl=2.82 tokens=32768 latency=2.99s
+[121/128] loss=1.5735 ppl=4.82 tokens=32768 latency=2.99s
+[122/128] loss=0.3507 ppl=1.42 tokens=32768 latency=2.99s
+[123/128] loss=3.2208 ppl=25.05 tokens=32768 latency=2.98s
+[124/128] loss=2.5237 ppl=12.47 tokens=32768 latency=2.98s
+[125/128] loss=2.4186 ppl=11.23 tokens=32768 latency=2.98s
+[126/128] loss=2.3584 ppl=10.57 tokens=32768 latency=2.98s
+[127/128] loss=1.2465 ppl=3.48 tokens=32768 latency=2.98s
+[128/128] loss=1.6226 ppl=5.07 tokens=32768 latency=2.99s
+{
+  "model": "comb-qwen",
+  "shard_id": 1,
+  "num_shards": 4,
+  "num_samples": 128,
+  "tokens": 4194304,
+  "loss": 1.9554749766830355,
+  "ppl": 7.067275017474621,
+  "elapsed_sec": 383.4429795409087,
+  "data_dir": "/data3/junhaohu/data/prolong_qwen_v2_validation",
+  "block_size": 98304,
+  "file_start": 20,
+  "file_stride": 80,
+  "note": "Native validation objective; tokenizer/objective differs between comb-qwen and samba models."
+}

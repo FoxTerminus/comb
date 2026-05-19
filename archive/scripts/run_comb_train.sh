@@ -1,7 +1,6 @@
 #!/bin/bash
 # Comb + Qwen3-0.6B formal training
 set -e
-export CUDA_VISIBLE_DEVICES=2,3,4,7
 export PATH="/data3/junhaohu/anaconda3/envs/samba/bin:$PATH"
 export PYTHONPATH="/data3/junhaohu/comb:$PYTHONPATH"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -18,5 +17,8 @@ torchrun --nnodes=1 --nproc_per_node=4 --master-port=29600 \
   --act-ckpt \
   --log-interval 10 \
   --save-interval 500 \
+  --save-full-final \
+  --export-hf-final \
+  --hf-output-dir /data3/junhaohu/model/Comb-Qwen3-1B-Prolong \
   --seed 42 \
   --output-dir /data3/junhaohu/checkpoints/Comb-Qwen3-1B-Prolong
