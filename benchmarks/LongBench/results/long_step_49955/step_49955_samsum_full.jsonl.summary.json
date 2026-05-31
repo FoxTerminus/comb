@@ -1,0 +1,8 @@
+{
+  "dataset": "samsum",
+  "metric": "rouge_l",
+  "score": 0.2771183228214324,
+  "num_examples": 200,
+  "elapsed_sec": 834.5499966144562,
+  "output": "/data3/junhaohu/comb/benchmarks/LongBench/results/step_49955/step_49955_samsum_full.jsonl"
+}

@@ -1,0 +1,42 @@
+[
+  {
+    "dataset": "hotpotqa",
+    "metric": "qa_f1",
+    "score": 0.5741823811316845,
+    "num_examples": 200,
+    "elapsed_sec": 255.81718254089355,
+    "output": "/data3/junhaohu/comb/benchmarks/LongBench/results/llama31_8b/llama31_8b_hotpotqa_full.jsonl"
+  },
+  {
+    "dataset": "2wikimqa",
+    "metric": "qa_f1",
+    "score": 0.4895068668505735,
+    "num_examples": 200,
+    "elapsed_sec": 149.83562088012695,
+    "output": "/data3/junhaohu/comb/benchmarks/LongBench/results/llama31_8b/llama31_8b_2wikimqa_full.jsonl"
+  },
+  {
+    "dataset": "musique",
+    "metric": "qa_f1",
+    "score": 0.3755761347805753,
+    "num_examples": 200,
+    "elapsed_sec": 320.71092414855957,
+    "output": "/data3/junhaohu/comb/benchmarks/LongBench/results/llama31_8b/llama31_8b_musique_full.jsonl"
+  },
+  {
+    "dataset": "multi_news",
+    "metric": "rouge_l",
+    "score": 0.2588423503325876,
+    "num_examples": 200,
+    "elapsed_sec": 971.7986326217651,
+    "output": "/data3/junhaohu/comb/benchmarks/LongBench/results/llama31_8b/llama31_8b_multi_news_full.jsonl"
+  },
+  {
+    "dataset": "samsum",
+    "metric": "rouge_l",
+    "score": 0.3875019245270614,
+    "num_examples": 200,
+    "elapsed_sec": 358.34129667282104,
+    "output": "/data3/junhaohu/comb/benchmarks/LongBench/results/llama31_8b/llama31_8b_samsum_full.jsonl"
+  }
+]

@@ -1,0 +1,8 @@
+{
+  "dataset": "2wikimqa",
+  "metric": "qa_f1",
+  "score": 0.24254051437695584,
+  "num_examples": 200,
+  "elapsed_sec": 114.12838125228882,
+  "output": "/data3/junhaohu/comb/benchmarks/LongBench/results/cross_step_27165_2wikimqa_full.jsonl"
+}

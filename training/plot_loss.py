@@ -13,7 +13,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
-DEFAULT_OUTPUT_DIR = "/data3/junhaohu/checkpoints/CombLlama"
+DEFAULT_OUTPUT_DIR = "/data3/junhaohu/checkpoints/CombLlama_e32"
 
 
 def parse_args() -> argparse.Namespace:

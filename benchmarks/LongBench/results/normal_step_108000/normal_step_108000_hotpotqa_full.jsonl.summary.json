@@ -1,0 +1,8 @@
+{
+  "dataset": "hotpotqa",
+  "metric": "qa_f1",
+  "score": 0.23442755901462323,
+  "num_examples": 200,
+  "elapsed_sec": 138.38676500320435,
+  "output": "/data3/junhaohu/comb/benchmarks/LongBench/results/normal_step_108000/normal_step_108000_hotpotqa_full.jsonl"
+}

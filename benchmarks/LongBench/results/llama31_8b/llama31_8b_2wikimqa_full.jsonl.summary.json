@@ -1,0 +1,8 @@
+{
+  "dataset": "2wikimqa",
+  "metric": "qa_f1",
+  "score": 0.4895068668505735,
+  "num_examples": 200,
+  "elapsed_sec": 149.83562088012695,
+  "output": "/data3/junhaohu/comb/benchmarks/LongBench/results/llama31_8b/llama31_8b_2wikimqa_full.jsonl"
+}

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import json
 import math
 import os
@@ -28,7 +29,7 @@ from comb.models.tp_checkpoint import merge_state_dict_from_tp
 
 
 DEFAULT_TRAIN_DATASETS = ["SQuAD", "Natural-Instructions", "XSum", "Super-Natural-Instructions"]
-DEFAULT_OUTPUT_DIR = "/data3/junhaohu/checkpoints/CombLlama"
+DEFAULT_OUTPUT_DIR = "/data3/junhaohu/checkpoints/CombLlama_e32"
 DEFAULT_VALIDATION_SIZES = {
     "SQuAD": 2048,
     "XSum": 2048,
@@ -61,19 +62,86 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--resume", default=None, help="Checkpoint dir or rank checkpoint file.")
     parser.add_argument(
+        "--init-from",
+        default=None,
+        help=(
+            "Checkpoint dir or file used to initialize model weights only. "
+            "Optimizer, RNG, and dataset progress are not restored. "
+            "Use this for follow-up training on a different dataset/filter."
+        ),
+    )
+    parser.add_argument(
+        "--init-step",
+        type=int,
+        default=0,
+        help=(
+            "Starting global step when using --init-from. Logs/checkpoints continue "
+            "from this step, but optimizer and data progress start fresh."
+        ),
+    )
+    parser.add_argument(
         "--total-steps",
         type=int,
         default=None,
-        help="Optional optimizer-step limit. If omitted, train through all datasets exactly once.",
+        help=(
+            "Optional optimizer-step limit. Values greater than the current start step are treated as an "
+            "absolute global stop step. Values less than or equal to the current start step are treated as "
+            "additional steps for this run. If omitted, train through all datasets exactly once."
+        ),
     )
-    parser.add_argument("--micro-batch-size", type=int, default=64, help="Maximum samples per packed micro-batch.")
+    parser.add_argument(
+        "--step-offset",
+        type=int,
+        default=None,
+        help=(
+            "Offset added to the automatically computed one-pass total steps. "
+            "Use this when a follow-up run keeps global step numbers from an existing checkpoint."
+        ),
+    )
+    parser.add_argument("--micro-batch-size", type=int, default=32, help="Maximum samples per packed micro-batch.")
     parser.add_argument("--max-text-tokens-per-batch", type=int, default=8192)
-    parser.add_argument("--max-chunk-tokens-per-batch", type=int, default=32768)
+    parser.add_argument("--max-chunk-tokens-per-batch", type=int, default=49152)
     parser.add_argument("--max-text-len", type=int, default=2048)
-    parser.add_argument("--max-chunk-len", type=int, default=8192)
+    parser.add_argument("--max-chunk-len", type=int, default=65536)
+    parser.add_argument(
+        "--min-train-chunk-len",
+        type=int,
+        default=0,
+        help=(
+            "Optional lower bound for context/chunk length before the train/validation split. "
+            "Use with a larger --max-chunk-len when training on contexts longer than the default 8192."
+        ),
+    )
+    parser.add_argument(
+        "--short-chunk-subsample-len",
+        type=int,
+        default=512,
+        help=(
+            "Before the train/validation split, randomly keep a fraction of samples with chunk length below this value. "
+            "Use <=0 to disable short-context subsampling."
+        ),
+    )
+    parser.add_argument(
+        "--short-chunk-keep-ratio",
+        type=float,
+        default=0.1,
+        help=(
+            "Fraction of training samples with chunk length below --short-chunk-subsample-len to keep. "
+            "Longer samples are always kept."
+        ),
+    )
+    parser.add_argument(
+        "--scale-validation-size-after-short-subsample",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "When --validation-size is not set and short-context subsampling is enabled, "
+            "scale the default validation size by the dataset keep ratio after subsampling."
+        ),
+    )
     parser.add_argument("--length-bucket-size", type=int, default=4096)
-    parser.add_argument("--grad-accum", type=int, default=4)
-    parser.add_argument("--lr", type=float, default=5e-5)
+    parser.add_argument("--grad-accum", type=int, default=2)
+    parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--min-lr-mult", type=float, default=0.1)
     parser.add_argument("--warmup-steps", type=int, default=100)
     parser.add_argument(
@@ -83,10 +151,11 @@ def parse_args() -> argparse.Namespace:
         help="Optimizer-step horizon used only for lr decay. This does not limit actual training steps.",
     )
     parser.add_argument("--weight-decay", type=float, default=0.1)
+    parser.add_argument("--optimizer", choices=["adamw", "sgd"], default="adamw")
     parser.add_argument("--adam-beta1", type=float, default=0.9)
     parser.add_argument("--adam-beta2", type=float, default=0.95)
     parser.add_argument("--adam-eps", type=float, default=1e-8)
-    parser.add_argument("--grad-clip", type=float, default=1.0)
+    parser.add_argument("--grad-clip", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--log-interval", type=int, default=10)
@@ -94,14 +163,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--keep-last-n",
         type=int,
-        default=5,
+        default=3,
         help="Keep only the latest N step_* checkpoint directories. Use <=0 to keep all checkpoints.",
     )
     parser.add_argument("--validation", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--validation-size", type=int, default=None, help="Override validation examples per dataset.")
     parser.add_argument("--validation-seed", type=int, default=42)
-    parser.add_argument("--eval-interval", type=int, default=500)
+    parser.add_argument("--eval-interval", type=int, default=1000)
     parser.add_argument("--eval-max-batches", type=int, default=0, help="Optional cap per validation dataset; 0 evaluates all.")
+    parser.add_argument("--eval-only", action="store_true", help="Load weights and run validation loss once, then exit.")
     parser.add_argument("--save-final", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-full-final", action="store_true")
     parser.add_argument("--bf16", action=argparse.BooleanOptionalAction, default=True)
@@ -198,24 +268,34 @@ def load_datasets(args: argparse.Namespace) -> list[tuple[str, Dataset]]:
     return datasets
 
 
-def validation_size_for_dataset(name: str, dataset: Dataset, args: argparse.Namespace) -> int:
+def validation_size_for_dataset(
+    name: str,
+    dataset: Dataset,
+    args: argparse.Namespace,
+    validation_size_scales: dict[str, float] | None = None,
+) -> int:
     if not args.validation:
         return 0
     requested = args.validation_size
     if requested is None:
         requested = DEFAULT_VALIDATION_SIZES.get(name, 2048)
+        scale = 1.0 if validation_size_scales is None else validation_size_scales.get(name, 1.0)
+        if args.scale_validation_size_after_short_subsample and scale < 1.0:
+            requested = max(1, int(round(requested * scale)))
     if requested <= 0:
         return 0
     return min(requested, max(0, len(dataset) - 1))
 
 
 def split_train_validation(
-    datasets: list[tuple[str, Dataset]], args: argparse.Namespace
+    datasets: list[tuple[str, Dataset]],
+    args: argparse.Namespace,
+    validation_size_scales: dict[str, float] | None = None,
 ) -> tuple[list[tuple[str, Dataset]], list[tuple[str, Dataset]]]:
     train_datasets: list[tuple[str, Dataset]] = []
     validation_datasets: list[tuple[str, Dataset]] = []
     for offset, (name, dataset) in enumerate(datasets):
-        validation_size = validation_size_for_dataset(name, dataset, args)
+        validation_size = validation_size_for_dataset(name, dataset, args, validation_size_scales)
         if validation_size == 0:
             train_datasets.append((name, dataset))
             continue
@@ -229,6 +309,75 @@ def split_train_validation(
         train_datasets.append((name, train_dataset))
         validation_datasets.append((name, validation_dataset))
     return train_datasets, validation_datasets
+
+
+def filter_train_datasets_by_chunk_len(
+    datasets: list[tuple[str, Dataset]], args: argparse.Namespace
+) -> list[tuple[str, Dataset]]:
+    min_len = args.min_train_chunk_len
+    if min_len <= 0:
+        return datasets
+
+    filtered_datasets: list[tuple[str, Dataset]] = []
+    for name, dataset in datasets:
+        chunk_lens = _column_lengths(dataset, "chunk_ids")
+        indices = np.flatnonzero(chunk_lens >= min_len).astype(np.int64, copy=False)
+        filtered_count = len(dataset) - len(indices)
+        if len(indices) == 0:
+            raise ValueError(
+                f"Dataset {name} has no training samples with chunk length >= {min_len}. "
+                "Lower --min-train-chunk-len or choose another dataset."
+            )
+        filtered_dataset = dataset.select(indices)
+        print0(
+            f"dataset chunk-length filter: {name} kept={len(filtered_dataset)} "
+            f"filtered={filtered_count} min_train_chunk_len={min_len}"
+        )
+        filtered_datasets.append((name, filtered_dataset))
+    return filtered_datasets
+
+
+def subsample_short_train_chunks(
+    datasets: list[tuple[str, Dataset]], args: argparse.Namespace
+) -> tuple[list[tuple[str, Dataset]], dict[str, float]]:
+    threshold = args.short_chunk_subsample_len
+    keep_ratio = args.short_chunk_keep_ratio
+    if threshold <= 0 or keep_ratio >= 1.0:
+        return datasets, {name: 1.0 for name, _ in datasets}
+    if keep_ratio < 0.0:
+        raise ValueError("--short-chunk-keep-ratio must be >= 0.")
+
+    subsampled_datasets: list[tuple[str, Dataset]] = []
+    validation_size_scales: dict[str, float] = {}
+    for offset, (name, dataset) in enumerate(datasets):
+        chunk_lens = _column_lengths(dataset, "chunk_ids")
+        short_indices = np.flatnonzero(chunk_lens < threshold).astype(np.int64, copy=False)
+        long_indices = np.flatnonzero(chunk_lens >= threshold).astype(np.int64, copy=False)
+
+        rng = np.random.default_rng(args.seed + 10_000 + offset)
+        if keep_ratio <= 0.0:
+            kept_short = np.empty(0, dtype=np.int64)
+        else:
+            keep_count = int(round(len(short_indices) * keep_ratio))
+            keep_count = min(len(short_indices), max(0, keep_count))
+            kept_short = rng.choice(short_indices, size=keep_count, replace=False) if keep_count else np.empty(0, dtype=np.int64)
+
+        kept_indices = np.concatenate([kept_short, long_indices])
+        if len(kept_indices) == 0:
+            raise ValueError(
+                f"Dataset {name} has no samples left after short chunk subsampling. "
+                "Increase --short-chunk-keep-ratio or disable subsampling."
+            )
+        rng.shuffle(kept_indices)
+        subsampled_dataset = dataset.select(kept_indices)
+        validation_size_scales[name] = len(subsampled_dataset) / max(1, len(dataset))
+        print0(
+            f"dataset short-chunk subsample: {name} kept={len(subsampled_dataset)} "
+            f"short_kept={len(kept_short)}/{len(short_indices)} long_kept={len(long_indices)} "
+            f"threshold={threshold} keep_ratio={keep_ratio:g} validation_size_scale={validation_size_scales[name]:.6f}"
+        )
+        subsampled_datasets.append((name, subsampled_dataset))
+    return subsampled_datasets, validation_size_scales
 
 
 def move_batch_to_device(batch: dict[str, Any], device: torch.device) -> dict[str, Any]:
@@ -524,6 +673,16 @@ def load_resume(model, optimizer, resume: str, datasets: list[tuple[str, Dataset
     return int(ckpt.get("step", 0)), data_state
 
 
+def load_init_weights(model, init_from: str) -> None:
+    path = Path(init_from)
+    if path.is_dir():
+        path = path / f"rank_{dist.get_rank():05d}.pt"
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
+    model.load_state_dict(state, strict=True)
+    print0(f"initialized model weights from {path}")
+
+
 class OffsetBatchSampler(Sampler[list[int]]):
     """Skip already-consumed packed micro-batches without materializing dataset rows."""
 
@@ -647,6 +806,14 @@ def evaluate_validation_loss(
             writer.writerows(rows)
     if was_training:
         model.train()
+    gc.collect()
+    torch.cuda.empty_cache()
+    dist.barrier(device_ids=[torch.cuda.current_device()])
+
+
+def clear_cuda_memory() -> None:
+    gc.collect()
+    torch.cuda.empty_cache()
     dist.barrier(device_ids=[torch.cuda.current_device()])
 
 
@@ -662,10 +829,35 @@ def train_loop(
 ) -> None:
     if not datasets:
         raise ValueError("At least one training dataset is required.")
-    total_steps = args.total_steps if args.total_steps is not None else effective_total_steps(datasets, args)
+    one_pass_steps = effective_total_steps(datasets, args)
+    if args.total_steps is not None:
+        if args.total_steps <= 0:
+            raise ValueError("--total-steps must be positive when specified.")
+        if args.total_steps <= start_step:
+            total_steps = start_step + args.total_steps
+            print0(
+                f"interpreting total_steps={args.total_steps} as additional steps because "
+                f"start_step={start_step}; global stop step is {total_steps}."
+            )
+        else:
+            total_steps = args.total_steps
+    else:
+        if args.step_offset is not None:
+            total_steps = one_pass_steps + args.step_offset
+        elif start_step:
+            total_steps = one_pass_steps + start_step
+        else:
+            total_steps = one_pass_steps
+        if total_steps <= start_step:
+            print0(
+                f"computed total_steps={total_steps} is not after start_step={start_step}; "
+                f"falling back to one more full data pass and stopping at {start_step + one_pass_steps}."
+            )
+            total_steps = start_step + one_pass_steps
     if start_step >= total_steps:
         print0(f"start_step={start_step} already reached total_steps={total_steps}; nothing to train.")
         return
+    print0(f"one-pass optimizer steps: {one_pass_steps}")
     print0(f"total optimizer steps: {total_steps}")
     print0(f"lr schedule steps: {args.lr_schedule_steps}")
 
@@ -855,6 +1047,7 @@ def train_loop(
                     f"saving boundary checkpoint at step={step}"
                 )
                 save_checkpoint(model, optimizer, step, config, args, current_data_state())
+                clear_cuda_memory()
                 batch = next(iterator)
             micro_batches.append(batch)
             micro_batch_offset += 1
@@ -925,12 +1118,14 @@ def train_loop(
 
         if args.save_interval > 0 and step % args.save_interval == 0:
             save_checkpoint(model, optimizer, step, config, args, current_data_state())
+            clear_cuda_memory()
 
         if completed_dataset_name is not None:
             write_training_log()
             advance_dataset()
             print0(f"completed dataset: {completed_dataset_name}; saving boundary checkpoint at step={step}")
             save_checkpoint(model, optimizer, step, config, args, current_data_state())
+            clear_cuda_memory()
 
         if validation_datasets and args.eval_interval > 0 and step % args.eval_interval == 0:
             evaluate_validation_loss(model, validation_datasets, args, device, step, validation_log_path)
@@ -938,6 +1133,7 @@ def train_loop(
     if args.save_final:
         write_training_log()
         save_checkpoint(model, optimizer, step, config, args, current_data_state())
+        clear_cuda_memory()
     if args.save_full_final:
         save_full_checkpoint(model, step, config, args, current_data_state())
 
@@ -955,23 +1151,63 @@ def main() -> None:
         raise ValueError("vocab_size must divide TP world size for vocab-parallel lm_head.")
 
     datasets = load_datasets(args)
-    train_datasets, validation_datasets = split_train_validation(datasets, args)
+    datasets = filter_train_datasets_by_chunk_len(datasets, args)
+    datasets, validation_size_scales = subsample_short_train_chunks(datasets, args)
+    train_datasets, validation_datasets = split_train_validation(datasets, args, validation_size_scales)
     print0("datasets:")
     for dataset_name, dataset in train_datasets:
         validation_size = next((len(val_dataset) for val_name, val_dataset in validation_datasets if val_name == dataset_name), 0)
         print0(f"  {dataset_name}: train={len(dataset)} validation={validation_size}")
     model = build_model(args, config, tp_group)
-    optimizer = torch.optim.AdamW(
-        (param for param in model.parameters() if param.requires_grad),
-        lr=args.lr,
-        betas=(args.adam_beta1, args.adam_beta2),
-        eps=args.adam_eps,
-        weight_decay=args.weight_decay,
-    )
+    trainable_params = (param for param in model.parameters() if param.requires_grad)
+    if args.optimizer == "adamw":
+        optimizer = torch.optim.AdamW(
+            trainable_params,
+            lr=args.lr,
+            betas=(args.adam_beta1, args.adam_beta2),
+            eps=args.adam_eps,
+            weight_decay=args.weight_decay,
+        )
+    elif args.optimizer == "sgd":
+        optimizer = torch.optim.SGD(trainable_params, lr=args.lr, weight_decay=args.weight_decay)
+    else:
+        raise ValueError(f"Unsupported optimizer: {args.optimizer}")
+    if args.resume and args.init_from:
+        raise ValueError("--resume and --init-from are mutually exclusive.")
     if args.resume:
         start_step, resume_data_state = load_resume(model, optimizer, args.resume, train_datasets)
     else:
-        start_step, resume_data_state = 0, None
+        if args.init_from:
+            load_init_weights(model, args.init_from)
+            start_step = args.init_step
+        else:
+            if args.init_step:
+                raise ValueError("--init-step can only be used together with --init-from.")
+            start_step = 0
+        resume_data_state = None
+    if args.eval_only:
+        validation_log_path = Path(args.output_dir) / "validation_log.csv"
+        if is_rank0() and not validation_log_path.exists():
+            validation_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with validation_log_path.open("w", newline="") as f:
+                csv.writer(f).writerow(
+                    [
+                        "step",
+                        "dataset",
+                        "loss",
+                        "micro_batches",
+                        "samples",
+                        "text_tokens",
+                        "chunk_tokens",
+                        "label_tokens",
+                        "max_text_len",
+                        "max_chunk_len",
+                    ]
+                )
+        device = torch.device("cuda", torch.cuda.current_device())
+        evaluate_validation_loss(model, validation_datasets, args, device, start_step, validation_log_path)
+        dist.destroy_process_group()
+        return
     train_loop(model, optimizer, train_datasets, validation_datasets, start_step, resume_data_state, config, args)
     dist.destroy_process_group()
 

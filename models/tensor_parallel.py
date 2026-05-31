@@ -121,10 +121,10 @@ class _VocabParallelCrossEntropy(Function):
         if target_in_rank.any():
             rows = torch.arange(grad.shape[0], device=grad.device)
             grad[rows[target_in_rank], local_target_index[target_in_rank]] -= 1.0
-        grad = grad * valid.unsqueeze(1).to(grad.dtype)
-        grad = grad / denom.to(grad.dtype)
+        grad.mul_(valid.unsqueeze(1).to(grad.dtype))
+        grad.div_(denom.to(grad.dtype))
         grad = grad.reshape(ctx.input_shape)
-        grad = grad * grad_output.to(grad.dtype)
+        grad.mul_(grad_output.to(grad.dtype))
         return grad, None, None, None, None
 
 
@@ -293,7 +293,12 @@ def _patch_text_self_attention_forward(text_model: nn.Module, tp_size: int) -> N
         position_embeddings,
         cu_seqlens_q: torch.Tensor,
         max_seqlen_q: int,
+        decode_cache=None,
+        cache_layer_idx=None,
     ) -> torch.Tensor:
+        if decode_cache is not None:
+            raise NotImplementedError("TP benchmark decode cache is not supported.")
+
         from flash_attn import flash_attn_varlen_func
         from transformers.models.llama.modeling_llama import apply_rotary_pos_emb
 
@@ -393,13 +398,16 @@ def _patch_language_model_forward(language_model: nn.Module, tp_group: dist.Proc
             self._vocab_start_index,
             self._vocab_end_index,
         )
-        logits = local_logits
-        if self._tp_gather_output_logits:
-            logits = all_gather_last_dim(local_logits, self._tp_group)
+        logits = None
+        if labels is None:
+            logits = local_logits
+            if self._tp_gather_output_logits:
+                logits = all_gather_last_dim(local_logits, self._tp_group)
+            logits = logits.float()
 
         return CausalLMOutput(
             loss=loss,
-            logits=logits.float(),
+            logits=logits,
             hidden_states=outputs.hidden_states,
         )
 

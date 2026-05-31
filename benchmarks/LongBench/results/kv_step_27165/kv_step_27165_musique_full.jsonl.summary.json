@@ -1,0 +1,8 @@
+{
+  "dataset": "musique",
+  "metric": "qa_f1",
+  "score": 0.11166329250476995,
+  "num_examples": 200,
+  "elapsed_sec": 215.56561541557312,
+  "output": "/data3/junhaohu/comb/benchmarks/LongBench/results/kv_step_27165/kv_step_27165_musique_full.jsonl"
+}

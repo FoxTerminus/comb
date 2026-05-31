@@ -1,0 +1,8 @@
+{
+  "dataset": "samsum",
+  "metric": "rouge_l",
+  "score": 0.3875019245270614,
+  "num_examples": 200,
+  "elapsed_sec": 358.34129667282104,
+  "output": "/data3/junhaohu/comb/benchmarks/LongBench/results/llama31_8b/llama31_8b_samsum_full.jsonl"
+}

@@ -1,0 +1,8 @@
+{
+  "dataset": "musique",
+  "metric": "qa_f1",
+  "score": 0.10633081069878939,
+  "num_examples": 200,
+  "elapsed_sec": 211.8596007823944,
+  "output": "/data3/junhaohu/comb/benchmarks/LongBench/results/cross_step_27165_musique_full.jsonl"
+}

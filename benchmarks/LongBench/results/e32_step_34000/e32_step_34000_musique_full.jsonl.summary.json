@@ -1,0 +1,8 @@
+{
+  "dataset": "musique",
+  "metric": "qa_f1",
+  "score": 0.11697742289477446,
+  "num_examples": 200,
+  "elapsed_sec": 410.2162787914276,
+  "output": "/data3/junhaohu/comb/benchmarks/LongBench/results/e32_step_34000/e32_step_34000_musique_full.jsonl"
+}

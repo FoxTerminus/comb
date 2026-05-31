@@ -1,0 +1,8 @@
+{
+  "dataset": "multi_news",
+  "metric": "rouge_l",
+  "score": 0.14617379553295742,
+  "num_examples": 200,
+  "elapsed_sec": 2661.3837339878082,
+  "output": "/data3/junhaohu/comb/benchmarks/LongBench/results/step_24826/step_24826_multi_news_full.jsonl"
+}

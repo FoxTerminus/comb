@@ -1,0 +1,8 @@
+{
+  "dataset": "2wikimqa",
+  "metric": "qa_f1",
+  "score": 0.26957010275651044,
+  "num_examples": 200,
+  "elapsed_sec": 98.38226914405823,
+  "output": "/data3/junhaohu/comb/benchmarks/LongBench/results/normal_step_108000/normal_step_108000_2wikimqa_full.jsonl"
+}
