@@ -42,6 +42,18 @@ class NIDataset(DatasetBase):
             "token_count": len(context["input_ids"])
         }
 
+
+class CuratedNIDataset(DatasetBase):
+    """Locally materialized, task- and length-balanced NI subset."""
+
+    name = "Natural-Instructions-Curated"
+
+    def _init_data(self, split):
+        raise FileNotFoundError(
+            "The curated Natural-Instructions cache is missing. Run "
+            "`python -m data.curate_ni` before training."
+        )
+
 if __name__ == "__main__":
     model_name = "meta-llama/Llama-3.1-8B-Instruct"
     dataset = NIDataset(model_name, split="validation")

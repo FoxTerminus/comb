@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the COMB project
 from collections.abc import Iterable
 import logging
+import os
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -449,7 +450,10 @@ class CombProcessingInfo(BaseProcessingInfo):
         return {"image": 1}
     
     def get_tokenizer(self):
-        return AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")
+        tokenizer = os.getenv(
+            "COMB_TOKENIZER_PATH", "meta-llama/Llama-3.1-8B-Instruct"
+        )
+        return AutoTokenizer.from_pretrained(tokenizer, local_files_only=True)
 
 class CombDummyInputsBuilder(BaseDummyInputsBuilder[CombProcessingInfo]):
     def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:
@@ -628,6 +632,11 @@ class CombLlamaForConditionalGeneration(nn.Module, SupportsMultiModal):
                     num_layers=self.num_cross_layers,
                     request_id=str(pic_request_id[0].item())
                 )
+                if cross_attention_states is None:
+                    raise RuntimeError(
+                        "COMB failed to receive PIC tensors; refusing to "
+                        "continue with a context-free generation"
+                    )
                 set_pic_local_cache(cross_attention_states)
             else:
                 # FIXME: If the new request does not have `cross_attention_states`,

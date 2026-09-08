@@ -1,0 +1,37 @@
+{
+    "train_batch_size": 32,
+    "gradient_accumulation_steps": 4,
+    "bf16": {"enabled": true},
+    "optimizer": {
+        "type": "AdamW",
+        "params": {
+            "lr": 5e-5,
+            "weight_decay": 0.01
+        }
+    },
+    "scheduler": {
+        "type": "WarmupDecayLR",
+        "params": {
+            "warmup_min_lr": 0,
+            "warmup_max_lr": 5e-5,
+            "total_num_steps": 8e6
+        }
+    },
+    "tensorboard": {
+        "enabled": true,
+        "job_name": "comb_training"
+    },
+    "tensor_parallel": {
+        "autotp_size": 2,
+        "tensor_parallel": {
+            "tp_size": 2
+        }
+    },
+    "ckpt_folder": null,
+    "zero_optimization": {
+        "stage": 0
+    },
+    "checkpoint": {
+        "load_universal": true
+    }
+}

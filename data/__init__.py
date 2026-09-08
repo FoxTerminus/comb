@@ -1,6 +1,6 @@
 from .Squad import SquadDataset
-from .NaturalInstructions import NIDataset
-from .SuperNI import SuperNIDataset
+from .NaturalInstructions import CuratedNIDataset, NIDataset
+from .SuperNI import CuratedSuperNIDataset, SuperNIDataset
 from .Xsum import XsumDataset
 from .LongBench import *
 
@@ -23,6 +23,8 @@ DATASET_NAME_PROJ = {
 DATASET_DICT = {
     "SQuAD": SquadDataset,
     "Natural-Instructions": NIDataset,
+    "Natural-Instructions-Curated": CuratedNIDataset,
     "XSum": XsumDataset,
-    "Super-Natural-Instructions": SuperNIDataset
+    "Super-Natural-Instructions": SuperNIDataset,
+    "Super-Natural-Instructions-Curated": CuratedSuperNIDataset,
 }

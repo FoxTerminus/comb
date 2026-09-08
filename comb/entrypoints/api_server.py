@@ -8,6 +8,7 @@ It supports both streaming and non-streaming response modes.
 """
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 from argparse import ArgumentParser, Namespace
@@ -62,6 +63,18 @@ class AsyncCOMB:
             **kwargs,
         )
         self.model = model
+        # COMB currently wraps vLLM's synchronous ``LLM`` entry point and its
+        # model forward consumes exactly one PIC per invocation.  Calling the
+        # same object from several default-executor threads can both corrupt
+        # vLLM's internal transport and batch several ``pic_request_id`` values
+        # into a tensor the model cannot interpret.  A dedicated single-worker
+        # executor preserves async HTTP backpressure while enforcing the
+        # one-engine/one-PIC-at-a-time contract.  Keeping serialization inside
+        # the worker also remains safe if an awaiting coroutine is cancelled.
+        self._executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="comb-generate",
+        )
         
     async def generate(
         self,
@@ -80,11 +93,11 @@ class AsyncCOMB:
         Returns:
             The generated output from COMB.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         
         # Run the synchronous generate method in a thread pool
         result = await loop.run_in_executor(
-            None,
+            self._executor,
             lambda: self.comb.generate_for_single_request(prompt, **kwargs)
         )
         return result

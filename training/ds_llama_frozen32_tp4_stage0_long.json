@@ -1,0 +1,64 @@
+{
+    "train_batch_size": 32,
+    "gradient_accumulation_steps": 4,
+    "bf16": {
+        "enabled": true
+    },
+    "optimizer": {
+        "type": "AdamW",
+        "params": {
+            "lr": 5e-5,
+            "betas": [0.9, 0.95],
+            "eps": 1e-8,
+            "weight_decay": 0.01,
+            "torch_adam": true
+        }
+    },
+    "scheduler": {
+        "type": "WarmupDecayLR",
+        "params": {
+            "warmup_min_lr": 0,
+            "warmup_max_lr": 5e-5,
+            "warmup_num_steps": 100,
+            "warmup_type": "linear",
+            "total_num_steps": 8000000
+        }
+    },
+    "gradient_clipping": 1.0,
+    "tensorboard": {
+        "enabled": true,
+        "job_name": "comb_frozen32_long_stage"
+    },
+    "tensor_parallel": {
+        "autotp_size": 4,
+        "tp": {
+            "tp_size": 4
+        },
+        "tensor_parallel": {
+            "tp_size": 4
+        },
+        "partition_config": {
+            "use_default_specs": false,
+            "strict_mode": false,
+            "layer_specs": [
+                {
+                    "patterns": [
+                        ".*\\.(?:self_attn|cross_attn)\\.o_proj\\.weight$",
+                        ".*\\.mlp\\.down_proj\\.weight$"
+                    ],
+                    "partition_type": "row"
+                },
+                {
+                    "patterns": [
+                        ".*\\.(?:self_attn|cross_attn)\\.[qkv]_proj\\.weight$",
+                        ".*\\.mlp\\.(?:up|gate)_proj\\.weight$"
+                    ],
+                    "partition_type": "column"
+                }
+            ]
+        }
+    },
+    "zero_optimization": {
+        "stage": 0
+    }
+}

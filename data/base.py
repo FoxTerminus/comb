@@ -6,6 +6,8 @@ It divides the samples into different buckets accordint to their length.
 
 from abc import ABC, abstractmethod
 from datasets import load_from_disk
+import hashlib
+import json
 import numpy as np
 import os
 import pandas as pd
@@ -24,6 +26,7 @@ CPU_NUM = os.cpu_count()
 HF_HOME = os.getenv('HF_HOME', '~/.cache/huggingface')
 CACHE_DIR = HF_HOME + '/bucket_cache'
 NUM_INSTANCES_PER_FILE = 1 << 20
+BUCKET_CACHE_FORMAT_VERSION = 1
 
 def collate_fn(batch):
     return {
@@ -68,7 +71,8 @@ class DatasetBase(ABC):
         raise NotImplementedError("Tokenization must be implemented.")
         
     def _init_tokenizer(self):
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        tokenizer_path = os.getenv("COMB_TOKENIZER_PATH", self.model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
         if self.tokenizer.pad_token is None:
             # add new pad_token
             self.tokenizer.pad_token = '<PAD>'
@@ -80,36 +84,112 @@ class DatasetBase(ABC):
     def __getitem__(self, idx):
         return self.data[idx]
 
+    def _bucket_cache_identity(self):
+        """Return the semantic inputs that determine cached bucket contents."""
+        fingerprint = getattr(self.data, "_fingerprint", None)
+        if fingerprint is None:
+            # A pandas-backed dataset has no cheap, authoritative content
+            # fingerprint.  Do not risk reusing a cache for different rows.
+            return None
+        return {
+            "format_version": BUCKET_CACHE_FORMAT_VERSION,
+            "dataset_name": self.name,
+            "dataset_fingerprint": fingerprint,
+            "num_rows": len(self.data),
+            "model_name": self.model_name,
+            "max_input_length": self.max_input_length,
+            "pad_token_id": self.tokenizer.pad_token_id,
+            "bucket_size": BUCKET_SIZE,
+            "bucket_batch_size": BUCKET_BATCH_SIZE,
+            "instances_per_file": NUM_INSTANCES_PER_FILE,
+        }
+
+    @staticmethod
+    def _load_bucket_cache(cache_dir, identity):
+        manifest_path = os.path.join(cache_dir, "manifest.json")
+        try:
+            with open(manifest_path) as handle:
+                manifest = json.load(handle)
+        except (OSError, ValueError):
+            return None
+        if manifest.get("identity") != identity:
+            return None
+        bucket_files = []
+        for item in manifest.get("files", []):
+            path = os.path.join(cache_dir, item["name"])
+            try:
+                valid = os.path.getsize(path) == item["size"] and item["size"] > 0
+            except OSError:
+                valid = False
+            if not valid:
+                return None
+            bucket_files.append((item["batch_size"], path))
+        return bucket_files or None
+
+    @staticmethod
+    def _publish_bucket_cache(cache_dir, identity, bucket_files):
+        files = [
+            {
+                "batch_size": batch_size,
+                "name": os.path.basename(path),
+                "size": os.path.getsize(path),
+            }
+            for batch_size, path in bucket_files
+        ]
+        manifest_path = os.path.join(cache_dir, "manifest.json")
+        temporary_path = manifest_path + f".tmp-{os.getpid()}"
+        with open(temporary_path, "w") as handle:
+            json.dump({"identity": identity, "files": files}, handle, indent=2)
+            handle.write("\n")
+        os.replace(temporary_path, manifest_path)
+
     def bucketing(self, local_rank, world_size):
         num_files = 0
         # Only one rank handles the dataset
         if local_rank == 0 or world_size == 1:
-            bucket_files = []
-            os.makedirs(CACHE_DIR, exist_ok=True)
-            df = self.data if isinstance(self.data, pd.DataFrame) else self.data.to_pandas()
-            df['bucket'] = pd.cut(df['token_count'], bins=BUCKET_SIZE,
-                                labels=range(len(BUCKET_SIZE) - 1), ordered=False)
-            label_column = self.model_name if self.model_name in df else 'labels'
-            for i, group_df in df.groupby('bucket', observed=True):
-                bsz = BUCKET_BATCH_SIZE[i]
-                # Shuffle
-                group_df = group_df.sample(frac=1, random_state=42)
-                # Divide the DataFrame if it is too large
-                for start in range(0, len(group_df), NUM_INSTANCES_PER_FILE):
-                    cache_file = os.path.join(CACHE_DIR, f"bucket_{num_files}.parquet")
-                    num_files += 1
+            identity = self._bucket_cache_identity()
+            if identity is None:
+                cache_dir = os.path.join(CACHE_DIR, "uncached")
+                bucket_files = None
+            else:
+                identity_text = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+                cache_key = hashlib.sha256(identity_text.encode()).hexdigest()[:20]
+                safe_name = self.name.replace("/", "_").replace(" ", "_")
+                cache_dir = os.path.join(CACHE_DIR, f"{safe_name}_{cache_key}")
+                bucket_files = self._load_bucket_cache(cache_dir, identity)
 
-                    # Delete cache
-                    if os.path.exists(cache_file):
-                        os.remove(cache_file)
+            if bucket_files is None:
+                bucket_files = []
+                os.makedirs(cache_dir, exist_ok=True)
+                df = self.data if isinstance(self.data, pd.DataFrame) else self.data.to_pandas()
+                df['bucket'] = pd.cut(df['token_count'], bins=BUCKET_SIZE,
+                                    labels=range(len(BUCKET_SIZE) - 1), ordered=False)
+                label_column = self.model_name if self.model_name in df else 'labels'
+                for i, group_df in df.groupby('bucket', observed=True):
+                    bsz = BUCKET_BATCH_SIZE[i]
+                    # Shuffle
+                    group_df = group_df.sample(frac=1, random_state=42)
+                    # Divide the DataFrame if it is too large
+                    for start in range(0, len(group_df), NUM_INSTANCES_PER_FILE):
+                        cache_file = os.path.join(cache_dir, f"bucket_{num_files}.parquet")
+                        temporary_file = cache_file + f".tmp-{os.getpid()}"
+                        num_files += 1
 
-                    df = group_df.iloc[start: start + NUM_INSTANCES_PER_FILE]
-                    max_length = df['token_count'].max()
-                    df = df.apply(pad_tokens, axis=1, result_type='expand',
-                                            args=(max_length, self.max_input_length,
-                                            label_column, self.tokenizer.pad_token_id))
-                    df.to_parquet(cache_file, index=False)
-                    bucket_files.append((bsz, cache_file))
+                        padded_df = group_df.iloc[start: start + NUM_INSTANCES_PER_FILE]
+                        max_length = padded_df['token_count'].max()
+                        padded_df = padded_df.apply(
+                            pad_tokens,
+                            axis=1,
+                            result_type='expand',
+                            args=(max_length, self.max_input_length,
+                                  label_column, self.tokenizer.pad_token_id),
+                        )
+                        padded_df.to_parquet(temporary_file, index=False)
+                        os.replace(temporary_file, cache_file)
+                        bucket_files.append((bsz, cache_file))
+                if identity is not None:
+                    self._publish_bucket_cache(cache_dir, identity, bucket_files)
+            num_files = len(bucket_files)
 
         # Synchronize
         if world_size > 1:

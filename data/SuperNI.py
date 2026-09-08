@@ -25,6 +25,36 @@ SPECIAL_INSTRUCTIONS = [
     'In this task, a passage will be given and the goal is to generate a question about temporal relations based on that passage. A temporal relation describes the relation between two things with respect to time e.g., something happens/starts/terminates/... immediately/shortly/usually/... before/after/during/... something else.'
 ]
 
+
+def split_superni_prompt(prompt):
+    """Split a Super-NI prompt with the same rules used by preprocessing."""
+    normalized = re.sub(r'\n+', '\n', prompt)
+    lines = normalized.split('\n')
+    if not lines or not lines[0]:
+        raise ValueError("Super-NI prompt has no instruction")
+
+    first = lines[0]
+    second = lines[1] if len(lines) > 1 else ""
+    if first in SPECIAL_INSTRUCTIONS:
+        instruction = '\n'.join(lines[:-1])
+        context = lines[-1]
+    elif len(lines) > 1 and (
+        (first[-1] == "'" and second.startswith("'"))
+        or second.startswith('.')
+        or first == (
+            "In this task, you're given an input that contains two words, and "
+            "your task is to predict the correct preposition that connects these "
+            "two words. Predict the preposition that explicitly conveys both "
+            "words' meaning, e.g., Word1: king "
+        )
+    ):
+        instruction = '\n'.join(lines[:2])
+        context = '\n'.join(lines[2:])
+    else:
+        instruction = first
+        context = '\n'.join(lines[1:])
+    return instruction, context
+
 class SuperNIDataset(DatasetBase):
     name = "Super-Natural-Instructions"
     def _init_data(self, split):
@@ -40,18 +70,7 @@ class SuperNIDataset(DatasetBase):
             }]
         )
         # Split instruction and context
-        p = re.sub(r'\n+', '\n', example["prompt"])
-        s = p.split('\n')
-        if s[0] in SPECIAL_INSTRUCTIONS:
-            instruction = '\n'.join(s[:-1])
-            context = s[-1]
-        elif ((s[0][-1] == "'" and s[1][0] == "'") or s[1][0] == '.' or
-            s[0] == "In this task, you're given an input that contains two words, and your task is to predict the correct preposition that connects these two words. Predict the preposition that explicitly conveys both words' meaning, e.g., Word1: king "):
-            instruction = '\n'.join(s[:2])
-            context = '\n'.join(s[2:])
-        else:
-            instruction = s[0]
-            context = '\n'.join(s[1:])
+        instruction, context = split_superni_prompt(example["prompt"])
 
         task = self.tokenizer.apply_chat_template(
             [{
@@ -74,6 +93,18 @@ class SuperNIDataset(DatasetBase):
             "labels": answer,
             "token_count": len(context["input_ids"])
         }
+
+
+class CuratedSuperNIDataset(DatasetBase):
+    """Locally materialized, length-balanced subset of Super-NI."""
+
+    name = "Super-Natural-Instructions-Curated"
+
+    def _init_data(self, split):
+        raise FileNotFoundError(
+            "The curated Super-NI cache is missing. Run "
+            "`python -m data.curate_superni` before training."
+        )
 
 if __name__ == "__main__":
     model_name = "meta-llama/Llama-3.1-8B-Instruct"
