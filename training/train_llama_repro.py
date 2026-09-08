@@ -395,6 +395,8 @@ def main() -> None:
     deepspeed.init_distributed(timeout=datetime.timedelta(seconds=7200))
     config = json.loads(Path(args.config).read_text())
     config["ckpt_folder"] = None
+    if config.get("tensorboard", {}).get("enabled"):
+        config["tensorboard"].setdefault("output_path", str(output_dir / "tensorboard"))
     config["tensor_parallel"]["autotp_size"] = args.tensor_parallel_size
     config["tensor_parallel"]["tensor_parallel"]["tp_size"] = (
         args.tensor_parallel_size
