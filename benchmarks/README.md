@@ -1,3 +1,15 @@
+# Local evaluation tools
+
+The original benchmark instructions follow below. For the local Frozen32 model,
+start with `evaluate_frozen32_hf_repro.py`, `evaluate_hf_context_suite.py`,
+`context_dependency_eval.py`, and `pic_reuse_smoke.py`. These serve different
+protocols; read each CLI before choosing a dataset or scoring setup.
+
+Shell launchers are in [`../scripts/benchmarks/`](../scripts/benchmarks/).
+Tests are in [`../tests/benchmarks/`](../tests/benchmarks/). Generated results
+under `results/` are ignored by Git. See the
+[project guide](../docs/project-layout.md) for the model and checkpoint distinction.
+
 It is simple to conduct the experiments. The configuration of parameters is completed in `benchmark_consts.py`. You just need to run `main.py` with different values of the argument `--experiment`.
 ```bash
 python3 main.py

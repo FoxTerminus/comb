@@ -7,6 +7,18 @@
 # COMB
 COMB is a plug-and-play caching system for long-context LLM serving.
 
+## Local Frozen32 development
+
+This checkout also contains the Frozen32 training and evaluation work. Start with
+the [project guide](docs/project-layout.md), [training guide](training/README.md),
+and [test instructions](tests/README.md). Shell launchers live under
+[`scripts/`](scripts/README.md); historical reproduction notes live under
+[`docs/archive/`](docs/archive/2026-08-25-reproduction-status.md).
+
+The serving examples below describe the original COMB implementation. The
+Frozen32 HF model and its checkpoints are a separate model path; they are not
+interchangeable with the original COMB/vLLM checkpoints.
+
 ## Code Structure
 ```
 COMB
@@ -32,7 +44,11 @@ COMB
 │   └── supported_models.py
 ├── data
 ├── examples                     # For use case
-├── training                     # For training
+├── training                     # Training modules and DeepSpeed configs
+├── scripts                      # Shell launchers (training / benchmarks)
+├── tests                        # CPU tests (training / benchmarks)
+├── docs                         # Project guide and historical reports
+├── pytest.ini                   # Unified test discovery
 ├── environment.yml
 └── requirements.txt
 ```

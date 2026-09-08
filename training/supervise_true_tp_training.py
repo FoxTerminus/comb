@@ -33,7 +33,7 @@ SOURCE_FILES = (
     "training/true_tp_comb_adapter.py",
     "training/ds_llama_config.json",
     "training/ds_llama_true_tp_stage0_config.json",
-    "training/launch_llama_repro_true_tp.sh",
+    "scripts/training/launch_llama_repro_true_tp.sh",
     "training/run_full_resume_true_tp.sh",
     "comb/integration/hf/CombLlama.py",
     "data/base.py",

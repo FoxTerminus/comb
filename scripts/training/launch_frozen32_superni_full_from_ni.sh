@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cd "${script_dir}/../../training"
+
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 export PYTHONPATH=/data3/junhaohu/comb
 export HF_HOME=/data3/junhaohu/.cache/huggingface

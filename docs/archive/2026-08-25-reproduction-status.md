@@ -1,3 +1,10 @@
+# Historical snapshot
+
+This report predates the current Frozen32 work. References to active processes,
+checkpoint locations, and script paths below describe that historical run and
+are not current launch instructions. See [the project guide](../project-layout.md)
+for the current structure. The original report follows unchanged.
+
 # Local CombLlama reproduction status
 
 This workspace is reproducing the official `shijuzhao/Comb` CombLlama path.

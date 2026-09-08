@@ -4,6 +4,16 @@ training/comb_training
 benchmarks/results
 model/
 
+# Run artifacts (keep source, configs, and tests visible to Git)
+/outputs/
+events.out.tfevents.*
+/comb_training/
+/comb_frozen32_squad/
+/training/comb_frozen32_squad/
+/training/comb_frozen32_long_stage/
+/training/comb_ds0195_tp_compare/
+/training/training_loss.csv
+
 .DS_Store
 
 # Byte-compiled / optimized / DLL files

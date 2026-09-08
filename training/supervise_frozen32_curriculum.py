@@ -16,6 +16,7 @@ from training.checkpoint_integrity import valid_torch_zip
 
 ROOT = Path("/data3/junhaohu/checkpoints/CombLlamaFrozen32")
 TRAINING = Path("/data3/junhaohu/comb/training")
+LAUNCHERS = TRAINING.parent / "scripts/training"
 STATUS = ROOT / "curriculum_supervisor_status.json"
 POLL_SECONDS = 60
 
@@ -30,19 +31,19 @@ STAGES = [
         "name": "Natural-Instructions",
         "output": ROOT / "ni_stage2",
         "final_step": 196690,
-        "launch": TRAINING / "launch_frozen32_ni.sh",
+        "launch": LAUNCHERS / "launch_frozen32_ni.sh",
     },
     {
         "name": "XSum",
         "output": ROOT / "xsum_stage3",
         "final_step": 203068,
-        "launch": TRAINING / "launch_frozen32_xsum.sh",
+        "launch": LAUNCHERS / "launch_frozen32_xsum.sh",
     },
     {
         "name": "Super-Natural-Instructions",
         "output": ROOT / "superni_stage4",
         "final_step": 265285,
-        "launch": TRAINING / "launch_frozen32_superni.sh",
+        "launch": LAUNCHERS / "launch_frozen32_superni.sh",
     },
 ]
 

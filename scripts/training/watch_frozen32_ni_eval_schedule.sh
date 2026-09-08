@@ -25,7 +25,7 @@ do
     echo "milestone already complete, skipping: $step"
     continue
   fi
-  bash training/watch_frozen32_milestone_eval.sh \
+  bash scripts/training/watch_frozen32_milestone_eval.sh \
     "$step" \
     "$checkpoint_root" \
     "$milestone_root" \

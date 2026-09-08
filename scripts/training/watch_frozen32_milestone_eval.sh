@@ -55,11 +55,11 @@ done
 
 mkdir -p "$squad_output" "$heldout_output"
 
-/data3/junhaohu/comb/training/launch_frozen32_milestone_eval.sh \
+/data3/junhaohu/comb/scripts/training/launch_frozen32_milestone_eval.sh \
   "$eval_step" "$checkpoint_root" "$squad_output" \
   2>&1 | tee "$squad_output/eval_stdout.log"
 
-/data3/junhaohu/comb/training/launch_frozen32_milestone_eval.sh \
+/data3/junhaohu/comb/scripts/training/launch_frozen32_milestone_eval.sh \
   "$eval_step" "$checkpoint_root" "$heldout_output" "$suite_manifest" \
   2>&1 | tee "$heldout_output/eval_stdout.log"
 

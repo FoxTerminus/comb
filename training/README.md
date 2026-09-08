@@ -1,5 +1,46 @@
 # Train a Comb model
 
+## Current local entrypoints
+
+| Purpose | Entry point |
+| --- | --- |
+| Frozen32 training | `train_llama_frozen32.py` |
+| Shared resume, checkpoint retention, evaluation and export loop | `train_llama_repro.py` |
+| Original COMB true tensor parallel training | `train_llama_true_tp_repro.py` |
+| Original upstream training | `train_llama.py` |
+| Shell launch recipes | [`../scripts/training/`](../scripts/training/) |
+| Unit tests | [`../tests/training/`](../tests/training/) |
+
+Keep direct Python training invocations in this directory, with the repository
+root on `PYTHONPATH`. The training loop resolves config and source snapshot paths
+relative to this working directory. Shell launchers select the working directory
+themselves. Their output, resume, GPU and environment paths describe specific
+local experiments; inspect them before starting a new run.
+
+DeepSpeed configs remain beside the Python entrypoints to preserve their existing
+CLI and source snapshot paths:
+
+| Config | Role |
+| --- | --- |
+| `ds_llama_frozen32_tp4_stage0.json` | Frozen32 SQuAD stage |
+| `ds_llama_frozen32_tp4_stage0_long.json` | Frozen32 later stages |
+| `ds_llama_true_tp_stage0_config.json` | Original COMB true TP, ZeRO stage 0 |
+| `ds_llama_ds0195_tp_compare.json` | Historical DeepSpeed TP comparison |
+| `ds_llama_config.json` / `ds_deepseek_config.json` | Original model configs |
+
+For the shared reproduction loop, enabled TensorBoard logging defaults to
+`<output-dir>/tensorboard/` (DeepSpeed may add the job-name subdirectory).
+An explicit `tensorboard.output_path` in the supplied config takes precedence.
+Use an output directory outside the repository or the ignored `outputs/` directory.
+
+Historical supervisors and converters remain available for inspecting and
+recovering older runs. Some depend on missing historical launch scripts; see
+the [project guide](../docs/project-layout.md#historical-tools).
+
+## Original upstream workflow
+
+The following instructions describe the original COMB model, not Frozen32.
+
 ## Prepare datasets
 
 We expect that Comb model behaves the same as its backbone model, so the output of backbone model is used to train. Use the script `construct_data.py` to generate answers. Remember to specify the `model_name`.
@@ -19,8 +60,8 @@ To prevent Out of Memory (OOM) errors, the batch size of dataset should be speci
 
 ## Launch
 
-We use deepspeed to train the new parameters. `ds_config.json` includes the configuration of deepspeed. We launch the training with the following command.
+We use deepspeed to train the new parameters. `ds_llama_config.json` includes the configuration of deepspeed. We launch the training with the following command.
 Remember to change directory to `training` folder first (`cd training`).
 ```bash
-deepspeed --num_gpus=4 train.py
+deepspeed --num_gpus=4 train_llama.py
 ```

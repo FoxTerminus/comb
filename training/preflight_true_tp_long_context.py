@@ -331,7 +331,8 @@ def main() -> None:
             "query_tokens": query_tokens,
             "diagnostic_source_sha256": sha256_file(Path(__file__).resolve()),
             "launcher_source_sha256": sha256_file(
-                Path(__file__).with_name("run_long_context_capacity_preflight.sh")
+                Path(__file__).resolve().parents[1]
+                / "scripts/training/run_long_context_capacity_preflight.sh"
             ),
             "ranks": ranks,
             **checks,
